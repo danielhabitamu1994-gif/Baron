@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="am">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Baron Bingo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Noto+Sans+Ethiopic:wght@400;600;700&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+
+  <!-- SIDE MENU OVERLAY -->
+  <div class="overlay" id="menuOverlay" onclick="closeMenu()"></div>
+
+  <!-- SIDE MENU -->
+  <aside class="side-menu" id="sideMenu">
+    <div class="menu-inner">
+      <div class="menu-profile">
+        <div class="menu-avatar" id="menuAvatar">?</div>
+        <div class="menu-user-info">
+          <div class="menu-name" id="menuName">Loading...</div>
+          <div class="menu-phone" id="menuPhone">ስልክ አልተቀጠረም</div>
+        </div>
+      </div>
+      <div class="menu-balance-box">
+        <span class="mbl-label">ቀሪ ሂሳብ</span>
+        <span class="mbl-value" id="menuBalance">0</span>
+        <span class="mbl-curr">ETB</span>
+      </div>
+      <nav class="menu-nav">
+        <button class="menu-nav-btn" onclick="openDeposit(); closeMenu()">
+          <span class="mnb-icon">📥</span>
+          <span>ገንዘብ ያስገቡ (Deposit)</span>
+        </button>
+        <button class="menu-nav-btn" onclick="showHistory(); closeMenu()">
+          <span class="mnb-icon">📋</span>
+          <span>የግብይት ታሪክ</span>
+        </button>
+        <a class="menu-nav-btn" href="https://t.me/Baronbingosupport" target="_blank">
+          <span class="mnb-icon">💬</span>
+          <span>Support @Baronbingosupport</span>
+        </a>
+      </nav>
+      <div class="menu-footer">Baron Bingo v1.0 &copy; 2024</div>
+    </div>
+  </aside>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+  <!-- TOP BAR -->
+  <header class="top-bar">
+    <button class="menu-toggle" onclick="openMenu()">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="top-logo">BARON<span>BINGO</span></div>
+    <div class="top-balance" onclick="openDeposit()">
+      <span class="tb-coin">💰</span>
+      <span id="topBalance">0</span>
+    </div>
+  </header>
+
+  <!-- SCREENS CONTAINER -->
+  <main class="screens">
+
+    <!-- ===== SCREEN: HOME / STAKE SELECTION ===== -->
+    <section class="screen active" id="screen-home">
+      <div class="home-hero">
+        <div class="hero-title">የመወራረጃ<br>መጠን ይምረጡ</div>
+        <div class="hero-sub">Choose your stake to enter the game</div>
+      </div>
+      <div class="stake-grid" id="stakeGrid">
+        <!-- Cards injected by JS -->
+      </div>
+    </section>
+
+    <!-- ===== SCREEN: CARD SELECTION ===== -->
+    <section class="screen" id="screen-card">
+      <div class="sub-header">
+        <button class="back-btn" onclick="goHome()">❮</button>
+        <div class="sub-title">ካርድ ይምረጡ</div>
+        <div class="sub-badge" id="cardBadge">10 ETB</div>
+      </div>
+      <div class="card-picker-grid" id="cardPickerGrid"></div>
+      <div class="card-preview-wrap">
+        <div class="cp-label" id="cpLabel">Card #1</div>
+        <div class="bingo-preview" id="bingoPreview"></div>
+      </div>
+      <button class="cta-btn" id="startGameBtn" onclick="joinGame()">🎮 ጨዋታውን ጀምር</button>
+    </section>
+
+    <!-- ===== SCREEN: LOBBY / WAITING ===== -->
+    <section class="screen" id="screen-lobby">
+      <div class="lobby-wrap">
+        <div class="lobby-spinner"></div>
+        <div class="lobby-title">ተጫዋቾችን በመጠበቅ ላይ...</div>
+        <div class="lobby-count">
+          <span id="lobbyJoined">0</span> / <span id="lobbyNeeded">6</span> ተጫዋቾች
+        </div>
+        <div class="lobby-players" id="lobbyPlayers"></div>
+        <button class="cancel-btn" onclick="cancelLobby()">❌ ሰርዝ</button>
+      </div>
+    </section>
+
+    <!-- ===== SCREEN: GAME ===== -->
+    <section class="screen" id="screen-game">
+      <!-- Game Top Bar -->
+      <div class="game-topbar">
+        <div class="gtb-left">
+          <div class="gtb-round" id="gtbRound">Round 1</div>
+          <div class="gtb-players" id="gtbPlayers">👥 6</div>
+        </div>
+        <div class="gtb-prize" id="gtbPrize">🏆 0 ETB</div>
+        <button class="gtb-leave" onclick="leaveGame()">Exit</button>
+      </div>
+
+      <!-- Call + Card Layout -->
+      <div class="game-layout">
+
+        <!-- LEFT: CALL ZONE -->
+        <div class="call-zone">
+          <div class="call-zone-title">CALL ZONE</div>
+          <div class="bingo-headers">
+            <span class="bh bh-b">B</span>
+            <span class="bh bh-i">I</span>
+            <span class="bh bh-n">N</span>
+            <span class="bh bh-g">G</span>
+            <span class="bh bh-o">O</span>
+          </div>
+          <!-- Current big number -->
+          <div class="current-call-wrap">
+            <div class="current-call-letter" id="currentCallLetter">-</div>
+            <div class="current-call-number" id="currentCallNumber">?</div>
+          </div>
+          <!-- History strip -->
+          <div class="call-history" id="callHistory"></div>
+          <!-- All called list -->
+          <div class="called-list-label">ሁሉም የተጠሩ ቁጥሮች</div>
+          <div class="called-grid" id="calledGrid">
+            <!-- 75 small balls populated by JS -->
+          </div>
+        </div>
+
+        <!-- RIGHT: PLAYER CARD -->
+        <div class="player-card-zone">
+          <div class="pcz-label">የእርስዎ ካርድ</div>
+          <div class="bingo-card-header">
+            <span class="bch bch-b">B</span>
+            <span class="bch bch-i">I</span>
+            <span class="bch bch-n">N</span>
+            <span class="bch bch-g">G</span>
+            <span class="bch bch-o">O</span>
+          </div>
+          <div class="bingo-card" id="gameCard"></div>
+          <button class="bingo-shout-btn" id="bingoShoutBtn" onclick="shoutBingo()">
+            🎉 BINGO!
+          </button>
+        </div>
+      </div>
+
+      <!-- Players Sidebar (collapsible) -->
+      <div class="players-strip" id="playersStrip"></div>
+    </section>
+
+    <!-- ===== SCREEN: RESULT ===== -->
+    <section class="screen" id="screen-result">
+      <div class="result-wrap" id="resultWrap">
+        <div class="result-emoji" id="resultEmoji">🏆</div>
+        <div class="result-title" id="resultTitle">አሸነፉ!</div>
+        <div class="result-amount" id="resultAmount">+540 ETB</div>
+        <div class="result-winner" id="resultWinner">Winner: @you</div>
+        <div class="result-sub" id="resultSub">ሽልማቱ ወደ ሂሳብዎ ተጨምሯል</div>
+        <button class="cta-btn" onclick="goHome()">🎮 እንደገና ይጫወቱ</button>
+      </div>
+    </section>
+
+    <!-- ===== SCREEN: DEPOSIT ===== -->
+    <section class="screen" id="screen-deposit">
+      <div class="sub-header">
+        <button class="back-btn" onclick="goHome()">❮</button>
+        <div class="sub-title">Deposit</div>
+        <div class="sub-badge" style="background:rgba(0,200,83,0.2);color:#00c853;">TeleBirr</div>
+      </div>
+      <div class="deposit-card">
+        <div class="dc-title">💰 ገንዘብ ማስገቢያ</div>
+        <div class="dc-field-label">የአካውንት ስም</div>
+        <div class="dc-field-val">Getachew Abera</div>
+        <div class="dc-field-label">TeleBirr ቁጥር</div>
+        <div class="dc-copy-row">
+          <span id="depositPhone">0990633294</span>
+          <button class="copy-btn" onclick="copyPhone()">📋 ኮፒ</button>
+        </div>
+        <div class="dc-field-label">የብር መጠን (ቢያንስ 50 ETB)</div>
+        <input type="number" class="dc-input" id="depAmount" placeholder="100" min="50" />
+        <div class="dc-field-label">SMS ማረጋገጫ (TeleBirr)</div>
+        <input type="text" class="dc-input" id="depSms" placeholder="SMS code ይለጥፉ" />
+        <button class="cta-btn" style="margin-top:16px" onclick="submitDeposit()">📥 ጥያቄ ላክ</button>
+      </div>
+      <div class="history-section">
+        <div class="hs-title">📋 የቅርብ ጊዜ ትዕዛዞች</div>
+        <div id="depositHistory"></div>
+      </div>
+    </section>
+
+    <!-- ===== SCREEN: TRANSACTION HISTORY ===== -->
+    <section class="screen" id="screen-history">
+      <div class="sub-header">
+        <button class="back-btn" onclick="goHome()">❮</button>
+        <div class="sub-title">የግብይት ታሪክ</div>
+      </div>
+      <div id="fullHistory" class="history-list"></div>
+    </section>
+
+  </main>
+
+  <!-- Confetti container -->
+  <div class="confetti-wrap" id="confettiWrap"></div>
+
+  <!-- Firebase -->
+  <script type="module" src="script.js"></script>
+</body>
+</html>
