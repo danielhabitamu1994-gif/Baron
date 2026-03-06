@@ -32,8 +32,6 @@ const tgUser = tg?.initDataUnsafe?.user || {
   username: "demo_user"
 };
 const UID = String(tgUser.id);
-const ADMIN_ID = "8460829504";
-const IS_ADMIN = UID === ADMIN_ID;
 
 // ===== CONSTANTS =====
 const JOIN_SEC  = 30;
@@ -42,7 +40,7 @@ const CALL_MS   = 3500;   // ms between number calls
 const COMMISSION = 0.10;  // 10%
 const MIN_REAL   = 1;     // minimum real players to start
 const MAX_PLAYERS = 20;   // maximum in a room
-const NO_PLAYER_STAKES = new Set([]);
+const NO_PLAYER_STAKES = new Set([20, 100]);
 
 const BOT_NAMES = [
   "bek***","ale**","muli**","aben***","fits**","hayl**",
@@ -52,9 +50,9 @@ const BOT_NAMES = [
 
 const STAKE_CONFIG = [
   { amount: 10,  theme: "sc-gold",   icon: "🎯", min: 7,  max: 18 },
-  { amount: 20,  theme: "sc-green",  icon: "🎲", min: 5,  max: 15 },
+  { amount: 20,  theme: "sc-green",  icon: "🎲", min: 0,  max: 0  },
   { amount: 50,  theme: "sc-cyan",   icon: "💎", min: 3,  max: 10 },
-  { amount: 100, theme: "sc-purple", icon: "👑", min: 4,  max: 12 }
+  { amount: 100, theme: "sc-purple", icon: "👑", min: 0,  max: 0  }
 ];
 
 // ===== STATE =====
@@ -124,21 +122,7 @@ function closeMenu() {
 }
 window.openMenu  = openMenu;
 window.closeMenu = closeMenu;
-window.openDeposit = () => { showScreen("screen-deposit"); loadDepositHistory(); };
-window.openWithdraw = () => {
-  showScreen("screen-withdraw");
-  $("withdrawBalanceDisplay").textContent = userBalance.toFixed(2) + " ETB";
-  loadWithdrawHistory();
-};
-window.openWalletModal = () => {
-  $("wmBalance").textContent = userBalance.toFixed(2) + " ETB";
-  $("walletModalOverlay").classList.add("active");
-  $("walletModal").classList.add("active");
-};
-window.closeWalletModal = () => {
-  $("walletModalOverlay").classList.remove("active");
-  $("walletModal").classList.remove("active");
-};
+window.openDeposit = () => showScreen("screen-deposit");
 
 // ===== UPDATE UI BALANCE =====
 function updateBalanceUI() {
@@ -243,9 +227,6 @@ function startCycleEngine() {
         if (st.phase === "started") {
           st.phase = "join";
           resetPlayerCount(cfg.amount, cfg.min);
-          // Game just ended → save old cards as "prev" for 30% carry-over, then clear cache
-          lastGameCards[`prev_${cfg.amount}`] = lastGameCards[cfg.amount] || [];
-          lastGameCards[cfg.amount] = []; // force regeneration on next card screen open
         }
         st.elapsed = st.pos;
       } else {
@@ -281,12 +262,7 @@ function updateStakeCycleUI(amount) {
     tf.className  = "sc-timer-fill tf-started";
     tf.style.width = ((rem / GAME_SEC) * 100) + "%";
     tv.textContent = rem + "s";
-    // Player count stays frozen during game — no dropPlayers call
-  }
-
-  // If user is on card selection screen for this stake, sync the button
-  if ($("screen-card").classList.contains("active") && selectedStake === amount) {
-    updateStartBtn(amount);
+    if (Math.random() < 0.12 && rem < 35) dropPlayers(amount);
   }
 }
 
@@ -327,9 +303,6 @@ function resetPlayerCount(amount, min) {
 let pickedCardNo = 1;
 let takenCards   = new Set();
 
-// Stores last game's taken card numbers per stake, for 30% carry-over
-const lastGameCards = {}; // { [amount]: number[] }
-
 async function showCardSelection(amount) {
   selectedStake = amount;
   $("cardBadge").textContent = amount + " ETB";
@@ -338,120 +311,23 @@ async function showCardSelection(amount) {
   await loadTakenCards(amount);
   renderCardPicker();
   renderPreview(1);
-  updateStartBtn(amount);
 }
 window.goHome = () => showScreen("screen-home");
 
-// Updates the start button based on whether the game is in join or started phase
-function updateStartBtn(amount) {
-  const btn = $("startGameBtn");
-  if (!btn) return;
-  const st = cycleState[amount];
-  if (!st) return;
-  if (st.phase === "started") {
-    btn.disabled = true;
-    btn.textContent = "⏳ ጨዋታ እየተካሄደ ነው... ይጠብቁ";
-    btn.style.opacity = "0.55";
-    btn.style.cursor  = "not-allowed";
-    btn.onclick = null;
-  } else {
-    btn.disabled = false;
-    btn.textContent = "🎮 ጨዋታውን ጀምር";
-    btn.style.opacity = "1";
-    btn.style.cursor  = "pointer";
-    btn.onclick = joinGame;
-  }
-}
-
 async function loadTakenCards(amount) {
   takenCards = new Set();
-
-  const cfg = STAKE_CONFIG.find(c => c.amount === amount);
-  const st  = cycleState[amount];
-
-  // --- Phase "started": game is LIVE → all simulated cards released, only real room cards locked ---
-  if (st && st.phase === "started") {
-    const snap = await get(ref(db, `rooms`));
-    if (snap.exists()) {
-      snap.forEach(roomSnap => {
-        const r = roomSnap.val();
-        if (r.stake !== amount || r.status !== "started") return;
-        if (r.players) {
-          Object.values(r.players).forEach(p => {
-            if (p.cardNo) takenCards.add(p.cardNo);
-          });
-        }
+  // Check active rooms for this stake — cards in use
+  const snap = await get(ref(db, `rooms`));
+  if (!snap.exists()) return;
+  snap.forEach(roomSnap => {
+    const r = roomSnap.val();
+    if (r.stake !== amount || r.status === "finished") return;
+    if (r.players) {
+      Object.values(r.players).forEach(p => {
+        if (p.cardNo) takenCards.add(p.cardNo);
       });
     }
-    return; // No simulated cards — grid mostly open for next player
-  }
-
-  // --- Phase "join": lobby open → show stable simulated taken cards ---
-
-  // Step 1: Real cards from waiting rooms only
-  const snap = await get(ref(db, `rooms`));
-  const realTaken = new Set();
-  if (snap.exists()) {
-    snap.forEach(roomSnap => {
-      const r = roomSnap.val();
-      if (r.stake !== amount || r.status !== "waiting") return;
-      if (r.players) {
-        Object.values(r.players).forEach(p => {
-          if (p.cardNo) realTaken.add(p.cardNo);
-        });
-      }
-    });
-  }
-  realTaken.forEach(c => takenCards.add(c));
-
-  if (!cfg) return;
-
-  // Step 2: Use STABLE cached simulated cards — only regenerate when game cycle resets
-  // lastGameCards[amount] is set once per join cycle by the cycle engine, not on back-button
-  if (!lastGameCards[amount] || lastGameCards[amount].length === 0) {
-    _regenerateSimulatedCards(amount, cfg, realTaken);
-  }
-  (lastGameCards[amount] || []).forEach(c => {
-    if (!takenCards.has(c)) takenCards.add(c);
   });
-}
-
-// Called ONCE when a new join cycle starts (game just ended → new lobby open)
-function _regenerateSimulatedCards(amount, cfg, realTaken) {
-  const shownEl    = $(`sp-${amount}`);
-  const playerCount = shownEl ? (parseInt(shownEl.textContent) || cfg.min) : cfg.min;
-  const slotsNeeded = Math.max(0, playerCount - (realTaken ? realTaken.size : 0));
-  if (slotsNeeded <= 0) { lastGameCards[amount] = []; return; }
-
-  const prev       = lastGameCards[`prev_${amount}`] || [];
-  const carryCount = Math.round(slotsNeeded * 0.30);
-  const freshCount = slotsNeeded - carryCount;
-  const simulated  = new Set();
-
-  // 30% carry-over from previous game's cards
-  const prevAvail = prev.filter(c => !realTaken || !realTaken.has(c));
-  seededShuffle(prevAvail, amount * 31 + (Date.now() % 9999));
-  prevAvail.slice(0, carryCount).forEach(c => simulated.add(c));
-
-  // 70% fresh random cards
-  const pool = [];
-  for (let i = 1; i <= 100; i++) {
-    if ((!realTaken || !realTaken.has(i)) && !simulated.has(i)) pool.push(i);
-  }
-  seededShuffle(pool, amount * 13 + (Date.now() % 7777));
-  pool.slice(0, freshCount).forEach(c => simulated.add(c));
-
-  lastGameCards[amount] = Array.from(simulated);
-}
-
-// Simple in-place shuffle with a seed offset
-function seededShuffle(arr, offset) {
-  let s = (offset * 1103515245 + 12345) & 0x7fffffff;
-  function rnd() { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(rnd() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
 }
 
 function renderCardPicker() {
@@ -476,7 +352,7 @@ function renderCardPicker() {
 }
 
 function renderPreview(seed) {
-  const nums = generateCard(seed, selectedStake);
+  const nums = generateCard(seed);
   const grid = $("bingoPreview");
   grid.innerHTML = "";
   nums.forEach((n, i) => {
@@ -488,10 +364,9 @@ function renderPreview(seed) {
 }
 
 // ===== BINGO CARD GENERATOR =====
-function generateCard(seed, stake) {
-  const stakeOffset = stake ? stake * 137 : 0;
+function generateCard(seed) {
   const ranges = [[1,15],[16,30],[31,45],[46,60],[61,75]];
-  let s = (seed * 9301 + 49297 + stakeOffset);
+  let s = seed * 9301 + 49297;
   function rnd() { s = (s * 9301 + 49297) % 233280; return s / 233280; }
   let card = [];
   for (let col = 0; col < 5; col++) {
@@ -562,9 +437,10 @@ async function joinGame() {
 window.joinGame = joinGame;
 
 async function findOrCreateRoom(stake) {
-  // Look for open room with same stake
-  const snap = await get(ref(db, "rooms"));
-  if (snap.exists()) {
+  // Helper: scan for open waiting room
+  async function scanForRoom() {
+    const snap = await get(ref(db, "rooms"));
+    if (!snap.exists()) return null;
     let found = null;
     snap.forEach(r => {
       const v = r.val();
@@ -573,8 +449,12 @@ async function findOrCreateRoom(stake) {
         if (playerCount < MAX_PLAYERS) found = r.key;
       }
     });
-    if (found) return found;
+    return found;
   }
+
+  // First scan
+  let found = await scanForRoom();
+  if (found) return found;
 
   // Create new room
   const newRoom = ref(db, "rooms");
@@ -590,6 +470,16 @@ async function findOrCreateRoom(stake) {
     players: {},
     calledNumbers: []
   });
+
+  // Short wait then re-scan — if another room appeared in parallel, join that instead
+  await new Promise(r => setTimeout(r, 800));
+  const concurrent = await scanForRoom();
+  if (concurrent && concurrent !== roomId) {
+    // Another room opened — remove ours and join theirs
+    await remove(ref(db, `rooms/${roomId}`));
+    isHost = false;
+    return concurrent;
+  }
 
   isHost = true;
   return roomId;
@@ -641,9 +531,9 @@ function scheduleGameStart(roomId, room) {
   const players  = room.players ? Object.values(room.players) : [];
   const realCount = players.filter(p => !p.isBot).length;
 
-  // Add bots if < 6 total AND stake is 10
+  // Add bots if < 6 total (all stakes)
   let allPlayers = [...players];
-  if (stake === 10 && allPlayers.length < 6) {
+  if (allPlayers.length < 6) {
     const botsNeeded = Math.floor(Math.random() * (19 - 3 + 1)) + 3;
     const shuffledNames = shuffleArr([...BOT_NAMES]);
     const botUpdates = {};
@@ -743,7 +633,7 @@ function startGameUI(room) {
   $("gtbPrize").textContent   = "🏆 " + prize + " ETB";
 
   // Build player card
-  gameCardNums = generateCard(selectedCardNo, selectedStake);
+  gameCardNums = generateCard(selectedCardNo);
   daubedSet = new Set([12]); // FREE center
   renderGameCard(gameCardNums);
   buildCalledGrid();
@@ -810,8 +700,12 @@ function startCallerLoop(roomId) {
     const callOrder = room.callOrder || [];
     const idx = room.callIndex || 0;
 
-    if (idx >= callOrder.length) {
+    if (idx >= callOrder.length || idx >= 20) {
       clearInterval(callerInterval);
+      // If we hit 20 calls and no winner yet, find best scoring player
+      if (idx >= 20 && !room.winner) {
+        forceWinnerAt20(room, roomId);
+      }
       return;
     }
 
@@ -824,7 +718,7 @@ function startCallerLoop(roomId) {
       lastCalled: num
     });
 
-    // Bot auto-check bingo
+    // Bot auto-check bingo after each call
     if (room.players) {
       checkBotBingo(room, calledNumbers, roomId);
     }
@@ -835,6 +729,10 @@ function startCallerLoop(roomId) {
 function syncCalledNumbers(calledNums) {
   if (!calledNums || !calledNums.length) return;
   const latest = calledNums[calledNums.length - 1];
+
+  // Update call counter
+  const countEl = $("gtbCallCount");
+  if (countEl) countEl.textContent = `Call ${calledNums.length}/20`;
 
   // Big display
   $("currentCallLetter").textContent = numToLetter(latest);
@@ -994,21 +892,52 @@ function checkBotBingo(room, calledNumbers, roomId) {
   const players = Object.values(room.players);
   const bots = players.filter(p => p.isBot);
 
-  // Each bot has ~3% chance per call to "win" naturally (after 20 calls)
   if (calledNumbers.length < 20) return;
+
+  // At exactly 20 calls, find the bot with most matches and declare winner
+  let bestBot = null;
+  let bestScore = -1;
   bots.forEach(bot => {
-    const botCard = generateCard(bot.cardNo, selectedStake);
+    const botCard   = generateCard(bot.cardNo, room.stake);
     const botDaubed = buildBotDaubed(botCard, calledNumbers);
-    if (checkBingo(botDaubed) && Math.random() < 0.04) {
-      const playerList = Object.values(room.players);
-      const prize = calcPrize(playerList.length, room.stake);
-      // Bot wins — house keeps prize
-      update(ref(db, `rooms/${roomId}`), {
-        winner: { uid: bot.uid, username: bot.username, isBot: true, prize },
-        status: "finished"
-      });
-    }
+    const score = botDaubed.size;
+    if (score > bestScore) { bestScore = score; bestBot = bot; }
   });
+
+  if (bestBot) {
+    const prize = calcPrize(players.length, room.stake);
+    update(ref(db, `rooms/${roomId}`), {
+      winner: { uid: bestBot.uid, username: bestBot.username, isBot: true, prize },
+      status: "finished"
+    });
+  }
+}
+
+// Force winner when 20 calls reached — picks real player or best bot
+async function forceWinnerAt20(room, roomId) {
+  const players    = Object.values(room.players || {});
+  const called     = room.calledNumbers || [];
+  const prize      = calcPrize(players.length, room.stake);
+
+  let bestPlayer = null;
+  let bestScore  = -1;
+  players.forEach(p => {
+    const card   = generateCard(p.cardNo, room.stake);
+    const daubed = buildBotDaubed(card, called);
+    if (daubed.size > bestScore) { bestScore = daubed.size; bestPlayer = p; }
+  });
+
+  if (bestPlayer && !room.winner) {
+    await update(ref(db, `rooms/${roomId}`), {
+      winner: {
+        uid: bestPlayer.uid,
+        username: bestPlayer.username || bestPlayer.name,
+        isBot: !!bestPlayer.isBot,
+        prize
+      },
+      status: "finished"
+    });
+  }
 }
 
 function buildBotDaubed(cardNums, calledNumbers) {
@@ -1116,153 +1045,61 @@ async function submitDeposit() {
   $("depAmount").value = "";
   $("depSms").value = "";
   toast("✅ ጥያቄዎ ተልኳል! ከ admin ማረጋገጫ ይጠብቁ");
-  // onValue listener already active — updates automatically
+  loadDepositHistory();
 }
 window.submitDeposit = submitDeposit;
 
-// ===== WITHDRAW =====
-async function submitWithdraw() {
-  const phone = $("wdPhone").value.trim();
-  const amt   = parseFloat($("wdAmount").value);
+async function loadDepositHistory() {
+  const snap = await get(ref(db, `users/${UID}/transactions`));
+  const container = $("depositHistory");
+  container.innerHTML = "";
+  if (!snap.exists()) return;
 
-  if (!phone || phone.length < 10) { toast("⚠ ትክክለኛ TeleBirr ቁጥር ያስገቡ!"); return; }
-  if (!amt || amt < 50)            { toast("⚠ ቢያንስ 50 ETB ያስገቡ!");           return; }
-  if (amt > userBalance)           { toast("⚠ በቂ ሂሳብ የለዎትም!");              return; }
-
-  const fee     = +(amt * 0.05).toFixed(2);
-  const payout  = +(amt - fee).toFixed(2);
-
-  // Deduct balance immediately (optimistic)
-  const newBal = +(userBalance - amt).toFixed(2);
-  await update(ref(db, `users/${UID}`), { balance: newBal });
-  userBalance = newBal;
-  $("topBalance").textContent = userBalance.toFixed(2);
-  $("menuBalance").textContent = userBalance.toFixed(2);
-  $("withdrawBalanceDisplay").textContent = userBalance.toFixed(2) + " ETB";
-
-  // Save to user transactions
-  const txRef = push(ref(db, `users/${UID}/transactions`));
-  await set(txRef, {
-    type:     "withdraw",
-    status:   "pending",
-    amount:   amt,
-    fee,
-    payout,
-    phone,
-    uid:      UID,
-    username: tgUser.username || myUsername,
-    ts:       serverTimestamp()
-  });
-
-  // Save to admin withdraw requests
-  const adminRef = push(ref(db, `withdrawRequests`));
-  await set(adminRef, {
-    uid:      UID,
-    username: tgUser.username || myUsername,
-    name:     `${tgUser.first_name||""} ${tgUser.last_name||""}`.trim(),
-    amount:   amt,
-    fee,
-    payout,
-    phone,
-    status:   "pending",
-    ts:       serverTimestamp()
-  });
-
-  $("wdPhone").value  = "";
-  $("wdAmount").value = "";
-  toast(`✅ ጥያቄዎ ተልኳል! ${payout} ETB ወደ ${phone} ይደርሳል`);
-  // onValue listener already active — updates automatically
-}
-window.submitWithdraw = submitWithdraw;
-
-// Withdraw history — single persistent listener, started once
-function initWithdrawHistoryListener() {
-  onValue(ref(db, `users/${UID}/transactions`), snap => {
-    const container = $("withdrawHistory");
-    if (!container) return;
-    container.innerHTML = "";
-    if (!snap.exists()) return;
-    const txs = [];
-    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
-    txs.filter(t => t.type === "withdraw").reverse().slice(0, 8).forEach(t => {
-      const el = document.createElement("div");
-      el.className = `hist-item hist-bet ${t.status === "pending" ? "hist-pending" : ""}`;
-      el.innerHTML = `
-        <div class="hist-label">📤 Withdraw → ${t.phone||""}</div>
-        <div class="hist-right">
-          <div class="hist-amount neg">-${t.amount} ETB</div>
-          ${t.status === "pending"
-            ? `<div class="hist-status">⏳ Pending...</div>`
-            : `<div class="hist-status" style="color:var(--green)">✅ ተላልፏል</div>`}
-        </div>
-      `;
-      container.appendChild(el);
-    });
+  const txs = [];
+  snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+  txs.filter(t => t.type === "deposit").reverse().slice(0, 8).forEach(t => {
+    const el = document.createElement("div");
+    el.className = `hist-item hist-dep ${t.status === "pending" ? "hist-pending" : ""}`;
+    el.innerHTML = `
+      <div class="hist-label">📥 Deposit</div>
+      <div class="hist-right">
+        <div class="hist-amount pos">+${t.amount} ETB</div>
+        ${t.status === "pending" ? `<div class="hist-status">⏳ Pending...</div>` : `<div class="hist-status" style="color:var(--green)">✅ Approved</div>`}
+      </div>
+    `;
+    container.appendChild(el);
   });
 }
-function loadWithdrawHistory() {} // kept for legacy calls — listener already running
-window.loadWithdrawHistory = loadWithdrawHistory;
 
-
-// Deposit history — single persistent listener, started once
-function initDepositHistoryListener() {
-  onValue(ref(db, `users/${UID}/transactions`), snap => {
-    const container = $("depositHistory");
-    if (!container) return;
-    container.innerHTML = "";
-    if (!snap.exists()) return;
-    const txs = [];
-    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
-    txs.filter(t => t.type === "deposit").reverse().slice(0, 8).forEach(t => {
-      const el = document.createElement("div");
-      el.className = `hist-item hist-dep ${t.status === "pending" ? "hist-pending" : ""}`;
-      el.innerHTML = `
-        <div class="hist-label">📥 Deposit</div>
-        <div class="hist-right">
-          <div class="hist-amount pos">+${t.amount} ETB</div>
-          ${t.status === "pending"
-            ? `<div class="hist-status">⏳ Pending...</div>`
-            : `<div class="hist-status" style="color:var(--green)">✅ Approved</div>`}
-        </div>
-      `;
-      container.appendChild(el);
-    });
+// ===== FULL HISTORY =====
+async function showHistory() {
+  showScreen("screen-history");
+  const snap = await get(ref(db, `users/${UID}/transactions`));
+  const container = $("fullHistory");
+  container.innerHTML = "";
+  if (!snap.exists()) {
+    container.innerHTML = `<div style="text-align:center;color:var(--text-dim);padding:40px;font-family:var(--font-am)">ምንም ግብይት የለም</div>`;
+    return;
+  }
+  const txs = [];
+  snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+  txs.reverse().forEach(t => {
+    const el = document.createElement("div");
+    const cls = t.type === "win" ? "hist-win" : t.type === "deposit" ? "hist-dep" : "hist-bet";
+    const icon = t.type === "win" ? "🏆" : t.type === "deposit" ? "📥" : "🎯";
+    const pos = t.type === "win" || t.type === "deposit";
+    el.className = `hist-item ${cls}`;
+    el.innerHTML = `
+      <div class="hist-label">${icon} ${t.type === "win" ? "ድል" : t.type === "deposit" ? "Deposit" : "Stake"} — ${t.stake||t.amount} ETB</div>
+      <div class="hist-right">
+        <div class="hist-amount ${pos?"pos":"neg"}">${pos?"+":"-"}${t.amount} ETB</div>
+        ${t.status === "pending" ? `<div class="hist-status">⏳ Pending</div>` : ""}
+      </div>
+    `;
+    container.appendChild(el);
   });
 }
-function loadDepositHistory() {} // kept for legacy calls — listener already running
-
-// Full history — single persistent listener, started once
-function initFullHistoryListener() {
-  onValue(ref(db, `users/${UID}/transactions`), snap => {
-    const container = $("fullHistory");
-    if (!container) return;
-    container.innerHTML = "";
-    if (!snap.exists()) {
-      container.innerHTML = `<div style="text-align:center;color:var(--text-dim);padding:40px;font-family:var(--font-am)">ምንም ግብይት የለም</div>`;
-      return;
-    }
-    const txs = [];
-    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
-    txs.reverse().forEach(t => {
-      const el   = document.createElement("div");
-      const cls  = t.type === "win" ? "hist-win" : t.type === "deposit" ? "hist-dep" : "hist-bet";
-      const icon = t.type === "win" ? "🏆" : t.type === "deposit" ? "📥" : t.type === "withdraw" ? "📤" : "🎯";
-      const pos  = t.type === "win" || t.type === "deposit";
-      el.className = `hist-item ${cls}`;
-      el.innerHTML = `
-        <div class="hist-label">${icon} ${t.type === "win" ? "ድል" : t.type === "deposit" ? "Deposit" : t.type === "withdraw" ? "Withdraw" : "Stake"} — ${t.stake||t.amount} ETB</div>
-        <div class="hist-right">
-          <div class="hist-amount ${pos?"pos":"neg"}">${pos?"+":"-"}${t.amount} ETB</div>
-          ${t.status === "pending" ? `<div class="hist-status">⏳ Pending</div>` : ""}
-        </div>
-      `;
-      container.appendChild(el);
-    });
-  });
-}
-function showHistory() { showScreen("screen-history"); }
 window.showHistory = showHistory;
-
 
 // ===== CONFETTI =====
 function launchConfetti() {
@@ -1291,259 +1128,7 @@ async function init() {
   buildStakeGrid();
   startCycleEngine();
   await initUser();
-
-  if (IS_ADMIN) {
-    showScreen("screen-admin");
-    loadAdminPanel();
-  } else {
-    initDepositHistoryListener();
-    initWithdrawHistoryListener();
-    initFullHistoryListener();
-  }
+  loadDepositHistory();
 }
 
 init();
-
-// ===== ADMIN PANEL =====
-function loadAdminPanel() {
-  loadAdminDeposits();
-  loadAdminWithdraws();
-  loadAdminUsers();
-  loadAdminStats();
-}
-
-function adminTab(tab) {
-  ["deposit","withdraw","users"].forEach(t => {
-    $(`adminPanel${t.charAt(0).toUpperCase()+t.slice(1)}`).style.display = t === tab ? "block" : "none";
-    $(`tab${t.charAt(0).toUpperCase()+t.slice(1)}`).classList.toggle("active", t === tab);
-  });
-}
-window.adminTab = adminTab;
-
-function loadAdminStats() {
-  // Pending deposits count
-  onValue(ref(db, "depositRequests"), snap => {
-    let count = 0;
-    snap.forEach(s => { if (s.val().status === "pending") count++; });
-    $("adminPendingDep").textContent = count;
-  });
-  // Pending withdrawals count
-  onValue(ref(db, "withdrawRequests"), snap => {
-    let count = 0;
-    snap.forEach(s => { if (s.val().status === "pending") count++; });
-    $("adminPendingWd").textContent = count;
-  });
-  // Total users
-  onValue(ref(db, "users"), snap => {
-    $("adminTotalUsers").textContent = snap.exists() ? Object.keys(snap.val()).length : 0;
-  });
-}
-
-// ---- DEPOSITS ----
-function loadAdminDeposits() {
-  onValue(ref(db, "depositRequests"), snap => {
-    const list = $("adminDepositList");
-    list.innerHTML = "";
-    if (!snap.exists()) {
-      list.innerHTML = `<div class="admin-empty">ምንም deposit request የለም</div>`;
-      return;
-    }
-    const items = [];
-    snap.forEach(s => {
-      const val = s.val();
-      items.push({ key: s.key, ...val });
-    });
-
-    // Sort: pending first, then by key (Firebase push keys are time-ordered)
-    items.sort((a, b) => {
-      if (a.status === "pending" && b.status !== "pending") return -1;
-      if (a.status !== "pending" && b.status === "pending") return 1;
-      return b.key > a.key ? 1 : -1;
-    });
-
-    items.forEach(item => {
-      const card = document.createElement("div");
-      card.className = `admin-card ${item.status === "pending" ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled"}`;
-      card.innerHTML = `
-        <div class="ac-row">
-          <div class="ac-user">
-            <div class="ac-name">@${item.username||"unknown"}</div>
-            <div class="ac-uid">ID: ${item.uid}</div>
-          </div>
-          <div class="ac-amount pos">+${item.amount} ETB</div>
-        </div>
-        <div class="ac-row ac-meta">
-          <span>📱 SMS: <b>${item.sms||"—"}</b></span>
-        </div>
-        <div class="ac-row ac-meta">
-          <span>👤 ${item.name||""}</span>
-          <span class="ac-status ${item.status === "pending" ? "st-pending" : item.status === "approved" ? "st-approved" : "st-cancelled"}">
-            ${item.status === "pending" ? "⏳ Pending" : item.status === "approved" ? "✅ Approved" : "❌ Cancelled"}
-          </span>
-        </div>
-        ${item.status === "pending" ? `
-        <div class="ac-actions">
-          <button class="ac-btn ac-approve" onclick="adminApproveDeposit('${item.key}','${item.uid}',${item.amount})">✅ Approve</button>
-          <button class="ac-btn ac-cancel" onclick="adminCancelDeposit('${item.key}')">❌ Cancel</button>
-        </div>` : ""}
-      `;
-      list.appendChild(card);
-    });
-  });
-}
-
-async function adminApproveDeposit(key, uid, amount) {
-  if (!confirm(`${amount} ETB deposit approve ታደርጋለህ?`)) return;
-  // Update deposit request status
-  await update(ref(db, `depositRequests/${key}`), { status: "approved" });
-  // Find and update user transaction
-  const txSnap = await get(ref(db, `users/${uid}/transactions`));
-  if (txSnap.exists()) {
-    txSnap.forEach(s => {
-      const t = s.val();
-      if (t.type === "deposit" && t.status === "pending" && t.amount === amount) {
-        update(ref(db, `users/${uid}/transactions/${s.key}`), { status: "approved" });
-      }
-    });
-  }
-  // Add balance to user
-  const balSnap = await get(ref(db, `users/${uid}/balance`));
-  const curBal = balSnap.exists() ? (balSnap.val() || 0) : 0;
-  await update(ref(db, `users/${uid}`), { balance: +(curBal + amount).toFixed(2) });
-  toast(`✅ ${amount} ETB approved! Balance updated.`);
-}
-window.adminApproveDeposit = adminApproveDeposit;
-
-async function adminCancelDeposit(key) {
-  if (!confirm("Deposit request ሰርዝ?")) return;
-  await update(ref(db, `depositRequests/${key}`), { status: "cancelled" });
-  toast("❌ Deposit cancelled.");
-}
-window.adminCancelDeposit = adminCancelDeposit;
-
-// ---- WITHDRAWALS ----
-function loadAdminWithdraws() {
-  onValue(ref(db, "withdrawRequests"), snap => {
-    const list = $("adminWithdrawList");
-    list.innerHTML = "";
-    if (!snap.exists()) {
-      list.innerHTML = `<div class="admin-empty">ምንም withdrawal request የለም</div>`;
-      return;
-    }
-    const items = [];
-    snap.forEach(s => items.push({ key: s.key, ...s.val() }));
-    items.sort((a, b) => {
-      if (a.status === "pending" && b.status !== "pending") return -1;
-      if (a.status !== "pending" && b.status === "pending") return 1;
-      return b.key > a.key ? 1 : -1;
-    });
-    items.forEach(item => {
-      const card = document.createElement("div");
-      card.className = `admin-card ${item.status === "pending" ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled"}`;
-      const date = item.ts ? new Date(item.ts).toLocaleString("am-ET") : "—";
-      card.innerHTML = `
-        <div class="ac-row">
-          <div class="ac-user">
-            <div class="ac-name">@${item.username||"unknown"}</div>
-            <div class="ac-uid">ID: ${item.uid}</div>
-          </div>
-          <div class="ac-amount neg">-${item.amount} ETB</div>
-        </div>
-        <div class="ac-row ac-meta">
-          <span>📱 TeleBirr: <b>${item.phone||"—"}</b></span>
-          <span class="ac-date">${date}</span>
-        </div>
-        <div class="ac-row ac-meta">
-          <span>💸 Payout: <b>${item.payout||item.amount} ETB</b> (fee: ${item.fee||0} ETB)</span>
-          <span class="ac-status ${item.status === "pending" ? "st-pending" : item.status === "approved" ? "st-approved" : "st-cancelled"}">
-            ${item.status === "pending" ? "⏳ Pending" : item.status === "approved" ? "✅ Sent" : "❌ Cancelled"}
-          </span>
-        </div>
-        ${item.status === "pending" ? `
-        <div class="ac-actions">
-          <button class="ac-btn ac-approve" onclick="adminApproveWithdraw('${item.key}','${item.uid}',${item.amount})">✅ Sent</button>
-          <button class="ac-btn ac-cancel" onclick="adminCancelWithdraw('${item.key}','${item.uid}',${item.amount})">❌ Cancel & Refund</button>
-        </div>` : ""}
-      `;
-      list.appendChild(card);
-    });
-  });
-}
-
-async function adminApproveWithdraw(key, uid, amount) {
-  if (!confirm(`${amount} ETB withdrawal ተላልፏል ብለህ confirm ታደርጋለህ?`)) return;
-  await update(ref(db, `withdrawRequests/${key}`), { status: "approved" });
-  const txSnap = await get(ref(db, `users/${uid}/transactions`));
-  if (txSnap.exists()) {
-    txSnap.forEach(s => {
-      const t = s.val();
-      if (t.type === "withdraw" && t.status === "pending" && t.amount === amount) {
-        update(ref(db, `users/${uid}/transactions/${s.key}`), { status: "approved" });
-      }
-    });
-  }
-  toast(`✅ Withdrawal confirmed as sent!`);
-}
-window.adminApproveWithdraw = adminApproveWithdraw;
-
-async function adminCancelWithdraw(key, uid, amount) {
-  if (!confirm(`Withdraw ሰርዝ እና ${amount} ETB ተመላሽ ታደርጋለህ?`)) return;
-  await update(ref(db, `withdrawRequests/${key}`), { status: "cancelled" });
-  const txSnap = await get(ref(db, `users/${uid}/transactions`));
-  if (txSnap.exists()) {
-    txSnap.forEach(s => {
-      const t = s.val();
-      if (t.type === "withdraw" && t.status === "pending" && t.amount === amount) {
-        update(ref(db, `users/${uid}/transactions/${s.key}`), { status: "cancelled" });
-      }
-    });
-  }
-  // Refund balance
-  const balSnap = await get(ref(db, `users/${uid}/balance`));
-  const curBal = balSnap.exists() ? (balSnap.val() || 0) : 0;
-  await update(ref(db, `users/${uid}`), { balance: +(curBal + amount).toFixed(2) });
-  toast(`↩ Refunded ${amount} ETB to user.`);
-}
-window.adminCancelWithdraw = adminCancelWithdraw;
-
-// ---- USERS ----
-function loadAdminUsers() {
-  onValue(ref(db, "users"), snap => {
-    const list = $("adminUserList");
-    list.innerHTML = "";
-    if (!snap.exists()) {
-      list.innerHTML = `<div class="admin-empty">ምንም user የለም</div>`;
-      return;
-    }
-    const users = [];
-    snap.forEach(s => users.push({ uid: s.key, ...s.val() }));
-    users.sort((a,b) => (b.balance||0) - (a.balance||0));
-    users.forEach(u => {
-      const card = document.createElement("div");
-      card.className = "admin-card acard-user";
-      card.innerHTML = `
-        <div class="ac-row">
-          <div class="ac-user">
-            <div class="ac-name">${u.name||u.username||"Unknown"}</div>
-            <div class="ac-uid">@${u.username||"—"} · ID: ${u.uid}</div>
-          </div>
-          <div class="ac-amount pos">${(u.balance||0).toFixed(2)} ETB</div>
-        </div>
-        <div class="ac-row ac-meta" style="gap:8px">
-          <button class="ac-btn ac-approve" style="flex:1" onclick="adminAdjustBalance('${u.uid}','${u.username||u.name||u.uid}',${u.balance||0})">💰 Balance አስተካክል</button>
-        </div>
-      `;
-      list.appendChild(card);
-    });
-  });
-}
-
-async function adminAdjustBalance(uid, name, currentBal) {
-  const val = prompt(`${name} ሂሳብ አዲስ balance ያስገቡ (አሁን: ${currentBal} ETB)`);
-  if (val === null) return;
-  const newBal = parseFloat(val);
-  if (isNaN(newBal) || newBal < 0) { toast("⚠ ትክክለኛ ቁጥር ያስገቡ"); return; }
-  await update(ref(db, `users/${uid}`), { balance: newBal });
-  toast(`✅ Balance updated to ${newBal} ETB`);
-}
-window.adminAdjustBalance = adminAdjustBalance;
