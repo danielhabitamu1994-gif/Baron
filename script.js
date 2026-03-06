@@ -1,5 +1,5 @@
 // ==================================================================
-//  BARON BINGO â€” script.js
+//  BARON BINGO — script.js
 //  Full production Telegram Mini App logic with Firebase Realtime DB
 // ==================================================================
 
@@ -49,10 +49,10 @@ const BOT_NAMES = [
 ];
 
 const STAKE_CONFIG = [
-  { amount: 10,  theme: "sc-gold",   icon: "ðŸŽ¯", min: 7,  max: 18 },
-  { amount: 20,  theme: "sc-green",  icon: "ðŸŽ²", min: 5,  max: 15 },
-  { amount: 50,  theme: "sc-cyan",   icon: "ðŸ’Ž", min: 3,  max: 10 },
-  { amount: 100, theme: "sc-purple", icon: "ðŸ‘‘", min: 4,  max: 12 }
+  { amount: 10,  theme: "sc-gold",   icon: "🎯", min: 7,  max: 18 },
+  { amount: 20,  theme: "sc-green",  icon: "🎲", min: 5,  max: 15 },
+  { amount: 50,  theme: "sc-cyan",   icon: "💎", min: 3,  max: 10 },
+  { amount: 100, theme: "sc-purple", icon: "👑", min: 4,  max: 12 }
 ];
 
 // ===== STATE =====
@@ -115,7 +115,7 @@ function toast(msg, dur = 2800) {
 function copyPhone() {
   const num = $("depositPhone").textContent;
   navigator.clipboard?.writeText(num)
-    .then(() => toast("âœ… á‰áŒ¥áˆ© á‰°áŒˆáˆá‰¥áŒ§áˆ!"))
+    .then(() => toast("✅ ቁጥሩ ተገልብጧል!"))
     .catch(() => { /* fallback */ });
 }
 window.copyPhone = copyPhone;
@@ -208,14 +208,14 @@ function buildStakeGrid() {
       <div class="sc-meta">
         <div class="sc-players">
           <span class="sc-live-dot" ${isNP ? 'style="background:#555;box-shadow:none;animation:none"' : ''}></span>
-          <span><span id="sp-${cfg.amount}">${isNP ? 0 : cfg.min}</span> á‰°áŒ«á‹‹á‰¾á‰½</span>
+          <span><span id="sp-${cfg.amount}">${isNP ? 0 : cfg.min}</span> ተጫዋቾች</span>
         </div>
-        <div class="sc-prize">ðŸ† <span class="sc-prize-val" id="sw-${cfg.amount}">${isNP ? 0 : cfg.min * cfg.amount}</span> ETB</div>
+        <div class="sc-prize">🏆 <span class="sc-prize-val" id="sw-${cfg.amount}">${isNP ? 0 : cfg.min * cfg.amount}</span> ETB</div>
         ${isNP
-          ? `<div class="sc-no-players-label">á‰°áŒ«á‹‹á‰½ á‹¨áˆˆáˆ</div>`
+          ? `<div class="sc-no-players-label">ተጫዋች የለም</div>`
           : `<div class="sc-phase phase-join" id="sph-${cfg.amount}">
                <span class="sc-phase-dot"></span>
-               <span id="sphl-${cfg.amount}">áˆ˜á‰€áˆ‹á‰€áˆ á‹­á‰»áˆ‹áˆ</span>
+               <span id="sphl-${cfg.amount}">መቀላቀል ይቻላል</span>
              </div>
              <div class="sc-timer">
                <div class="sc-timer-bar"><div class="sc-timer-fill tf-join" id="stf-${cfg.amount}" style="width:100%"></div></div>
@@ -227,7 +227,7 @@ function buildStakeGrid() {
 
     card.addEventListener("click", () => {
       if (isNP) {
-        toast("âš  á‹­áˆ… stake áˆ‹á‹­ áŒˆáŠ“ á‰°áŒ«á‹‹á‰¾á‰½ á‹¨áˆ‰áˆ");
+        toast("⚠ ይህ stake ላይ ገና ተጫዋቾች የሉም");
         return;
       }
       showCardSelection(cfg.amount);
@@ -251,7 +251,7 @@ function startCycleEngine() {
       st.phase   = synced.phase;
       st.elapsed = synced.elapsed;
 
-      // Detect phase transition: started â†’ join (game ended, new cycle)
+      // Detect phase transition: started → join (game ended, new cycle)
       if (wasStarted && st.phase === "join") {
         resetPlayerCount(cfg.amount, cfg.min);
       }
@@ -272,7 +272,7 @@ function updateStakeCycleUI(amount) {
   if (st.phase === "join") {
     const rem = JOIN_SEC - st.elapsed;
     ph.className  = "sc-phase phase-join";
-    lbl.textContent = "áˆ˜á‰€áˆ‹á‰€áˆ á‹­á‰»áˆ‹áˆ";
+    lbl.textContent = "መቀላቀል ይቻላል";
     tf.className  = "sc-timer-fill tf-join";
     tf.style.width = ((rem / JOIN_SEC) * 100) + "%";
     tv.textContent = rem + "s";
@@ -280,7 +280,7 @@ function updateStakeCycleUI(amount) {
   } else {
     const rem = GAME_SEC - st.elapsed;
     ph.className  = "sc-phase phase-started";
-    lbl.textContent = "áŒ¨á‹‹á‰³ áŒ€áˆáˆ¯áˆ";
+    lbl.textContent = "ጨዋታ ጀምሯል";
     tf.className  = "sc-timer-fill tf-started";
     tf.style.width = ((rem / GAME_SEC) * 100) + "%";
     tv.textContent = rem + "s";
@@ -349,13 +349,13 @@ function updateStartBtn(amount) {
   if (!st) return;
   if (st.phase === "started") {
     btn.disabled = true;
-    btn.textContent = "â³ áŒ¨á‹‹á‰³ áŠ¥á‹¨á‰°áŠ«áˆ„á‹° áŠá‹... á‹­áŒ á‰¥á‰";
+    btn.textContent = "⏳ ጨዋታ እየተካሄደ ነው... ይጠብቁ";
     btn.style.opacity = "0.55";
     btn.style.cursor  = "not-allowed";
     btn.onclick = null;
   } else {
     btn.disabled = false;
-    btn.textContent = "ðŸŽ® áŒ¨á‹‹á‰³á‹áŠ• áŒ€áˆáˆ­";
+    btn.textContent = "🎮 ጨዋታውን ጀምር";
     btn.style.opacity = "1";
     btn.style.cursor  = "pointer";
     btn.onclick = joinGame;
@@ -364,7 +364,7 @@ function updateStartBtn(amount) {
 
 async function loadTakenCards(amount) {
   takenCards = new Set();
-  // Check active rooms for this stake â€” cards in use
+  // Check active rooms for this stake — cards in use
   const snap = await get(ref(db, `rooms`));
   if (!snap.exists()) return;
   snap.forEach(roomSnap => {
@@ -406,7 +406,7 @@ function renderPreview(seed) {
   nums.forEach((n, i) => {
     const cell = document.createElement("div");
     cell.className = "bp-cell" + (i === 12 ? " bp-free" : "");
-    cell.textContent = i === 12 ? "â­" : n;
+    cell.textContent = i === 12 ? "⭐" : n;
     grid.appendChild(cell);
   });
 }
@@ -454,7 +454,7 @@ function shuffleArr(arr) {
 // ===== JOIN GAME =====
 async function joinGame() {
   if (userBalance < selectedStake) {
-    toast("âš  á‰€áˆª áˆ‚áˆ³á‰¥á‹Ž áŠ áŠáˆµá‰°áŠ› áŠá‹! Deposit á‹«á‹µáˆ­áŒ‰");
+    toast("⚠ ቀሪ ሂሳብዎ አነስተኛ ነው! Deposit ያድርጉ");
     return;
   }
 
@@ -519,11 +519,11 @@ async function findOrCreateRoom(stake) {
     calledNumbers: []
   });
 
-  // Short wait then re-scan â€” if another room appeared in parallel, join that instead
+  // Short wait then re-scan — if another room appeared in parallel, join that instead
   await new Promise(r => setTimeout(r, 800));
   const concurrent = await scanForRoom();
   if (concurrent && concurrent !== roomId) {
-    // Another room opened â€” remove ours and join theirs
+    // Another room opened — remove ours and join theirs
     await remove(ref(db, `rooms/${roomId}`));
     isHost = false;
     return concurrent;
@@ -639,7 +639,7 @@ function updateLobbyUI(players, stake) {
   real.forEach(p => {
     const chip = document.createElement("div");
     chip.className = "lp-chip lp-real";
-    chip.textContent = (p.uid === UID ? "â­ " : "") + p.username;
+    chip.textContent = (p.uid === UID ? "⭐ " : "") + p.username;
     wrap.appendChild(chip);
   });
   bots.slice(0, 5).forEach(p => {
@@ -667,7 +667,7 @@ function cancelLobby() {
   currentRoomId  = null;
   isHost = false;
   showScreen("screen-home");
-  toast("ðŸ”„ áŒ¨á‹‹á‰³ á‰°áˆ°áˆ­á‹Ÿáˆá¢ áŒˆáŠ•á‹˜á‰¥á‹Ž á‰°áˆ˜áˆáˆ·áˆ");
+  toast("🔄 ጨዋታ ተሰርዟል። ገንዘብዎ ተመልሷል");
 }
 window.cancelLobby = cancelLobby;
 
@@ -678,8 +678,8 @@ function startGameUI(room) {
   const prize   = calcPrize(players.length, room.stake);
 
   $("gtbRound").textContent   = "Stake: " + room.stake + " ETB";
-  $("gtbPlayers").textContent = "ðŸ‘¥ " + players.length;
-  $("gtbPrize").textContent   = "ðŸ† " + prize + " ETB";
+  $("gtbPlayers").textContent = "👥 " + players.length;
+  $("gtbPrize").textContent   = "🏆 " + prize + " ETB";
 
   // Build player card
   gameCardNums = generateCard(selectedCardNo);
@@ -725,7 +725,7 @@ function renderPlayersStrip(players) {
   players.forEach(p => {
     const chip = document.createElement("div");
     chip.className = "ps-chip" + (p.uid === UID ? " ps-self" : p.isBot ? " ps-bot" : "");
-    chip.textContent = (p.uid === UID ? "â­ " : "") + p.username;
+    chip.textContent = (p.uid === UID ? "⭐ " : "") + p.username;
     chip.id = "pchip-" + p.uid;
     strip.appendChild(chip);
   });
@@ -839,7 +839,7 @@ function manualDaub(idx) {
       cell.classList.add("gc-daubed");
       if (checkBingo(daubedSet)) $("bingoShoutBtn").classList.add("ready");
     } else {
-      toast("âš  á‹­áˆ… á‰áŒ¥áˆ­ áŒˆáŠ“ áŠ áˆá‰°áŒ áˆ«áˆ!");
+      toast("⚠ ይህ ቁጥር ገና አልተጠራም!");
     }
   });
 }
@@ -893,13 +893,13 @@ function getWinCells(daubed) {
 // ===== SHOUT BINGO =====
 async function shoutBingo() {
   if (!checkBingo(daubedSet)) {
-    toast("âš  áŒˆáŠ“ á‰¢áŠ•áŒŽ áŠ áˆáˆ†áŠáˆ! áˆáˆ‰áˆ á‰áŒ¥áˆ®á‰½ áŠ áˆá‰°á‹³á‰¡áˆ");
+    toast("⚠ ገና ቢንጎ አልሆነም! ሁሉም ቁጥሮች አልተዳቡም");
     return;
   }
   const snap = await get(ref(db, `rooms/${currentRoomId}`));
   if (!snap.exists()) return;
   const room = snap.val();
-  if (room.winner) { toast("ðŸ˜ž á‰€á‹µáˆž áŠ áˆ¸áŠ“áŠ á‰°á‹ˆáˆµáŠ—áˆ!"); return; }
+  if (room.winner) { toast("😞 ቀድሞ አሸናፊ ተወስኗል!"); return; }
 
   const players = room.players ? Object.values(room.players) : [];
   const prize   = calcPrize(players.length, room.stake);
@@ -962,7 +962,7 @@ function checkBotBingo(room, calledNumbers, roomId) {
   }
 }
 
-// Force winner when 20 calls reached â€” picks real player or best bot
+// Force winner when 20 calls reached — picks real player or best bot
 async function forceWinnerAt20(room, roomId) {
   const players    = Object.values(room.players || {});
   const called     = room.calledNumbers || [];
@@ -1017,21 +1017,21 @@ function showResultScreen(won, amount, winnerName) {
   const el_sub    = $("resultSub");
 
   if (won) {
-    el_emoji.textContent  = "ðŸ†";
-    el_title.textContent  = "áŠ áˆ¸áŠá‰!";
+    el_emoji.textContent  = "🏆";
+    el_title.textContent  = "አሸነፉ!";
     el_title.className    = "result-title";
     el_amount.textContent = "+" + amount + " ETB";
     el_amount.className   = "result-amount";
     el_winner.textContent = "Winner: " + winnerName;
-    el_sub.textContent    = "áˆ½áˆáˆ›á‰± á‹ˆá‹° áˆ‚áˆ³á‰¥á‹Ž á‰°áŒ¨áˆáˆ¯áˆ";
+    el_sub.textContent    = "ሽልማቱ ወደ ሂሳብዎ ተጨምሯል";
   } else {
-    el_emoji.textContent  = "ðŸ˜ž";
-    el_title.textContent  = "áŠ áˆá‰°áˆ³áŠ«áˆ";
+    el_emoji.textContent  = "😞";
+    el_title.textContent  = "አልተሳካም";
     el_title.className    = "result-title loss";
     el_amount.textContent = "-" + amount + " ETB";
     el_amount.className   = "result-amount loss";
     el_winner.textContent = "Winner: " + winnerName;
-    el_sub.textContent    = "áˆŒáˆ‹ á‰°áŒ«á‹‹á‰½ áŠ áˆ¸áŠ•ááˆá¢ áŠ¥áŠ•á‹°áŒˆáŠ“ á‹­áˆžáŠ­áˆ©!";
+    el_sub.textContent    = "ሌላ ተጫዋች አሸንፏል። እንደገና ይሞክሩ!";
   }
 
   showScreen("screen-result");
@@ -1055,7 +1055,7 @@ function leaveGame() {
   }
   cleanupGame();
   showScreen("screen-home");
-  toast("ðŸšª áŒ¨á‹‹á‰³á‹áŠ• áˆˆá‰…á‰€á‹‹áˆ");
+  toast("🚪 ጨዋታውን ለቅቀዋል");
 }
 window.leaveGame = leaveGame;
 
@@ -1064,10 +1064,10 @@ async function submitDeposit() {
   const amt = parseFloat($("depAmount").value);
   const sms = $("depSms").value.trim();
 
-  if (!amt || amt < 50) { toast("âš  á‰¢á‹«áŠ•áˆµ 50 ETB á‹«áˆµáŒˆá‰¡!"); return; }
-  if (!sms) { toast("âš  SMS áˆ›áˆ¨áŒ‹áŒˆáŒ« á‹«áˆµáˆáˆáŒ‹áˆ!"); return; }
+  if (!amt || amt < 50) { toast("⚠ ቢያንስ 50 ETB ያስገቡ!"); return; }
+  if (!sms) { toast("⚠ SMS ማረጋገጫ ያስፈልጋል!"); return; }
 
-  // Push to user transactions â€” capture key for admin sync
+  // Push to user transactions — capture key for admin sync
   const txRef = push(ref(db, `users/${UID}/transactions`));
   const txKey = txRef.key;
   await set(txRef, {
@@ -1080,7 +1080,7 @@ async function submitDeposit() {
     ts:       serverTimestamp()
   });
 
-  // Push to admin node â€” store txKey to enable precise sync
+  // Push to admin node — store txKey to enable precise sync
   const adminRef = push(ref(db, "depositRequests"));
   await set(adminRef, {
     uid:      UID,
@@ -1095,11 +1095,11 @@ async function submitDeposit() {
 
   $("depAmount").value = "";
   $("depSms").value    = "";
-  toast("âœ… áŒ¥á‹«á‰„á‹Ž á‰°áˆáŠ³áˆ! áŠ¨ admin áˆ›áˆ¨áŒ‹áŒˆáŒ« á‹­áŒ á‰¥á‰");
+  toast("✅ ጥያቄዎ ተልኳል! ከ admin ማረጋገጫ ይጠብቁ");
 }
 window.submitDeposit = submitDeposit;
 
-// Single persistent listener â€” started once at app init, never re-created
+// Single persistent listener — started once at app init, never re-created
 // ===== TRANSACTION HISTORY HELPERS =====
 function _fmtDate(ts) {
   if (!ts) return "";
@@ -1112,7 +1112,7 @@ function _fmtDate(ts) {
   const min = String(d.getMinutes()).padStart(2, "0");
   const ampm = hr >= 12 ? "PM" : "AM";
   hr = hr % 12 || 12;
-  return mo + " " + day + ", " + yr + " Â· " + hr + ":" + min + " " + ampm;
+  return mo + " " + day + ", " + yr + " · " + hr + ":" + min + " " + ampm;
 }
 
 function _buildHistItem(t) {
@@ -1130,26 +1130,26 @@ function _buildHistItem(t) {
 
   if (isDeposit) {
     borderColor = isPending ? "#ffa500" : isApproved ? "#00c853" : "#ff4444";
-    icon        = "ðŸ“¥";
+    icon        = "📥";
     label       = "Deposit";
     amountText  = "+" + t.amount + " ETB";
     amountClass = "pos";
   } else if (isWithdraw) {
     borderColor = isPending ? "#ffa500" : isApproved ? "#00b4d8" : "#ff4444";
-    icon        = "ðŸ“¤";
-    label       = "Withdraw Â· " + (t.phone || "");
+    icon        = "📤";
+    label       = "Withdraw · " + (t.phone || "");
     amountText  = "-" + t.amount + " ETB";
     amountClass = "neg";
   } else if (isWin) {
     borderColor = "#ffd700";
-    icon        = "ðŸ†";
-    label       = "á‹µáˆ Â· " + (t.stake || t.amount) + " ETB stake";
+    icon        = "🏆";
+    label       = "ድል · " + (t.stake || t.amount) + " ETB stake";
     amountText  = "+" + t.amount + " ETB";
     amountClass = "pos";
   } else {
     borderColor = "#ff4444";
-    icon        = "ðŸŽ¯";
-    label       = "Stake Â· " + (t.stake || t.amount) + " ETB";
+    icon        = "🎯";
+    label       = "Stake · " + (t.stake || t.amount) + " ETB";
     amountText  = "-" + (t.stake || t.amount) + " ETB";
     amountClass = "neg";
   }
@@ -1184,13 +1184,13 @@ function _buildHistItem(t) {
     const badge = document.createElement("div");
     if (isPending) {
       badge.className = "hist-badge hist-badge-pending";
-      badge.textContent = "â³ Pending";
+      badge.textContent = "⏳ Pending";
     } else if (isApproved) {
       badge.className = "hist-badge hist-badge-approved";
-      badge.textContent = isWithdraw ? "âœ… Sent" : "âœ… Approved";
+      badge.textContent = isWithdraw ? "✅ Sent" : "✅ Approved";
     } else if (isCancelled) {
       badge.className = "hist-badge hist-badge-cancelled";
-      badge.textContent = "âŒ Cancelled";
+      badge.textContent = "❌ Cancelled";
     }
     right.appendChild(badge);
   }
@@ -1222,9 +1222,9 @@ function loadDepositHistory() {
 async function submitWithdraw() {
   const phone = $("wdPhone").value.trim();
   const amt   = parseFloat($("wdAmount").value);
-  if (!phone || phone.length < 10) { toast("âš  á‰µáŠ­áŠ­áˆˆáŠ› TeleBirr á‰áŒ¥áˆ­ á‹«áˆµáŒˆá‰¡!"); return; }
-  if (!amt || amt < 50)            { toast("âš  á‰¢á‹«áŠ•áˆµ 50 ETB á‹«áˆµáŒˆá‰¡!");           return; }
-  if (amt > userBalance)           { toast("âš  á‰ á‰‚ áˆ‚áˆ³á‰¥ á‹¨áˆˆá‹Žá‰µáˆ!");              return; }
+  if (!phone || phone.length < 10) { toast("⚠ ትክክለኛ TeleBirr ቁጥር ያስገቡ!"); return; }
+  if (!amt || amt < 50)            { toast("⚠ ቢያንስ 50 ETB ያስገቡ!");           return; }
+  if (amt > userBalance)           { toast("⚠ በቂ ሂሳብ የለዎትም!");              return; }
 
   const fee    = +(amt * 0.05).toFixed(2);
   const payout = +(amt - fee).toFixed(2);
@@ -1236,7 +1236,7 @@ async function submitWithdraw() {
   $("menuBalance").textContent          = userBalance.toFixed(2);
   $("withdrawBalanceDisplay").textContent = userBalance.toFixed(2) + " ETB";
 
-  // Push to user transactions â€” capture key for admin sync
+  // Push to user transactions — capture key for admin sync
   const txRef = push(ref(db, `users/${UID}/transactions`));
   const txKey = txRef.key;
   await set(txRef, {
@@ -1251,7 +1251,7 @@ async function submitWithdraw() {
     ts:       serverTimestamp()
   });
 
-  // Push to admin node â€” store txKey to enable precise sync
+  // Push to admin node — store txKey to enable precise sync
   const adminRef = push(ref(db, "withdrawRequests"));
   await set(adminRef, {
     uid:      UID,
@@ -1268,7 +1268,7 @@ async function submitWithdraw() {
 
   $("wdPhone").value = "";
   $("wdAmount").value = "";
-  toast("âœ… áŒ¥á‹«á‰„á‹Ž á‰°áˆáŠ³áˆ! " + payout + " ETB á‹ˆá‹° " + phone + " á‹­á‹°áˆ­áˆ³áˆ");
+  toast("✅ ጥያቄዎ ተልኳል! " + payout + " ETB ወደ " + phone + " ይደርሳል");
 }
 window.submitWithdraw = submitWithdraw;
 
@@ -1301,7 +1301,7 @@ async function showHistory() {
     if (!snap.exists()) {
       const empty = document.createElement("div");
       empty.style.cssText = "text-align:center;color:rgba(255,255,255,0.3);padding:40px;font-family:var(--font-am)";
-      empty.textContent = "áˆáŠ•áˆ áŒá‰¥á‹­á‰µ á‹¨áˆˆáˆ";
+      empty.textContent = "ምንም ግብይት የለም";
       container.appendChild(empty);
       return;
     }
@@ -1388,7 +1388,7 @@ function loadAdminDeposits() {
     const list = $("adminDepositList");
     list.innerHTML = "";
     if (!snap.exists()) {
-      list.innerHTML = '<div class="admin-empty">áˆáŠ•áˆ deposit request á‹¨áˆˆáˆ</div>';
+      list.innerHTML = '<div class="admin-empty">ምንም deposit request የለም</div>';
       return;
     }
     const items = [];
@@ -1401,19 +1401,19 @@ function loadAdminDeposits() {
     items.forEach(item => {
       const card = document.createElement("div");
       const sc = item.status==="pending"?"acard-pending":item.status==="approved"?"acard-approved":"acard-cancelled";
-      const sl = item.status==="pending"?"â³ Pending":item.status==="approved"?"âœ… Approved":"âŒ Cancelled";
+      const sl = item.status==="pending"?"⏳ Pending":item.status==="approved"?"✅ Approved":"❌ Cancelled";
       const ss = item.status==="pending"?"st-pending":item.status==="approved"?"st-approved":"st-cancelled";
       card.className = "admin-card " + sc;
       const actionsHtml = item.status === "pending"
-        ? `<div class="ac-actions"><button class="ac-btn ac-approve" onclick="adminApproveDeposit('${item.key}','${item.uid}',${item.amount})">âœ… Approve</button><button class="ac-btn ac-cancel" onclick="adminCancelDeposit('${item.key}')">âŒ Cancel</button></div>`
+        ? `<div class="ac-actions"><button class="ac-btn ac-approve" onclick="adminApproveDeposit('${item.key}','${item.uid}',${item.amount})">✅ Approve</button><button class="ac-btn ac-cancel" onclick="adminCancelDeposit('${item.key}')">❌ Cancel</button></div>`
         : "";
-      card.innerHTML = `<div class="ac-row"><div class="ac-user"><div class="ac-name">@${item.username||"unknown"}</div><div class="ac-uid">ID: ${item.uid}</div></div><div class="ac-amount pos">+${item.amount} ETB</div></div><div class="ac-row ac-meta"><span>ðŸ“± SMS: <b>${item.sms||"â€”"}</b></span><span class="ac-status ${ss}">${sl}</span></div>` + actionsHtml;
+      card.innerHTML = `<div class="ac-row"><div class="ac-user"><div class="ac-name">@${item.username||"unknown"}</div><div class="ac-uid">ID: ${item.uid}</div></div><div class="ac-amount pos">+${item.amount} ETB</div></div><div class="ac-row ac-meta"><span>📱 SMS: <b>${item.sms||"—"}</b></span><span class="ac-status ${ss}">${sl}</span></div>` + actionsHtml;
       list.appendChild(card);
     });
   });
 }
 async function adminApproveDeposit(key, uid, amount) {
-  if (!confirm(amount + " ETB approve á‰³á‹°áˆ­áŒ‹áˆˆáˆ…?")) return;
+  if (!confirm(amount + " ETB approve ታደርጋለህ?")) return;
   try {
     // Get txKey from the admin request (for precise user tx update)
     const reqSnap = await get(ref(db, "depositRequests/" + key));
@@ -1422,7 +1422,7 @@ async function adminApproveDeposit(key, uid, amount) {
     // 1. Mark admin request approved
     await update(ref(db, "depositRequests/" + key), { status: "approved" });
 
-    // 2. Update user transaction â€” use txKey if available, else match by amount
+    // 2. Update user transaction — use txKey if available, else match by amount
     if (txKey) {
       await update(ref(db, "users/" + uid + "/transactions/" + txKey), { status: "approved" });
     } else {
@@ -1443,15 +1443,15 @@ async function adminApproveDeposit(key, uid, amount) {
     const cur = balSnap.exists() ? (balSnap.val() || 0) : 0;
     await update(ref(db, "users/" + uid), { balance: +(cur + amount).toFixed(2) });
 
-    toast("âœ… " + amount + " ETB approved! áˆ‚áˆ³á‰¡ á‹ˆá‹° á‰°áŒ á‰ƒáˆš á‰°áŒ¨áˆáˆ¯áˆ");
+    toast("✅ " + amount + " ETB approved! ሂሳቡ ወደ ተጠቃሚ ተጨምሯል");
   } catch(e) {
     console.error(e);
-    toast("âŒ Error: " + e.message);
+    toast("❌ Error: " + e.message);
   }
 }
 window.adminApproveDeposit = adminApproveDeposit;
 async function adminCancelDeposit(key) {
-  if (!confirm("á‹­áˆ…áŠ• deposit áˆ°áˆ­á‹?")) return;
+  if (!confirm("ይህን deposit ሰርዝ?")) return;
   try {
     const reqSnap = await get(ref(db, "depositRequests/" + key));
     const txKey   = reqSnap.exists() ? reqSnap.val().txKey  : null;
@@ -1462,16 +1462,16 @@ async function adminCancelDeposit(key) {
     if (txKey && uid) {
       await update(ref(db, "users/" + uid + "/transactions/" + txKey), { status: "cancelled" });
     }
-    toast("âŒ Deposit cancelled.");
+    toast("❌ Deposit cancelled.");
   } catch(e) {
-    toast("âŒ Error: " + e.message);
+    toast("❌ Error: " + e.message);
   }
 }
 window.adminCancelDeposit = adminCancelDeposit;
 function loadAdminWithdraws() {
   onValue(ref(db,"withdrawRequests"), snap => {
     const list = $("adminWithdrawList"); list.innerHTML = "";
-    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">áˆáŠ•áˆ withdrawal á‹¨áˆˆáˆ</div>`; return; }
+    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">ምንም withdrawal የለም</div>`; return; }
     const items = []; snap.forEach(s => items.push({key:s.key,...s.val()}));
     items.sort((a,b)=>(b.ts||0)-(a.ts||0));
     items.forEach(item => {
@@ -1479,15 +1479,15 @@ function loadAdminWithdraws() {
       card.className = `admin-card ${item.status==="pending"?"acard-pending":item.status==="approved"?"acard-approved":"acard-cancelled"}`;
       card.innerHTML = `
         <div class="ac-row"><div class="ac-user"><div class="ac-name">@${item.username||"unknown"}</div><div class="ac-uid">ID: ${item.uid}</div></div><div class="ac-amount neg">-${item.amount} ETB</div></div>
-        <div class="ac-row ac-meta"><span>ðŸ“± ${item.phone||"â€”"}</span><span>ðŸ’¸ ${item.payout||item.amount} ETB</span><span class="ac-status ${item.status==="pending"?"st-pending":item.status==="approved"?"st-approved":"st-cancelled"}">${item.status==="pending"?"â³ Pending":item.status==="approved"?"âœ… Sent":"âŒ Cancelled"}</span></div>
-        ${item.status==="pending"?`<div class="ac-actions"><button class="ac-btn ac-approve" onclick="adminApproveWithdraw('${item.key}','${item.uid}',${item.amount})">âœ… Sent</button><button class="ac-btn ac-cancel" onclick="adminCancelWithdraw('${item.key}','${item.uid}',${item.amount})">âŒ Refund</button></div>`:""}
+        <div class="ac-row ac-meta"><span>📱 ${item.phone||"—"}</span><span>💸 ${item.payout||item.amount} ETB</span><span class="ac-status ${item.status==="pending"?"st-pending":item.status==="approved"?"st-approved":"st-cancelled"}">${item.status==="pending"?"⏳ Pending":item.status==="approved"?"✅ Sent":"❌ Cancelled"}</span></div>
+        ${item.status==="pending"?`<div class="ac-actions"><button class="ac-btn ac-approve" onclick="adminApproveWithdraw('${item.key}','${item.uid}',${item.amount})">✅ Sent</button><button class="ac-btn ac-cancel" onclick="adminCancelWithdraw('${item.key}','${item.uid}',${item.amount})">❌ Refund</button></div>`:""}
       `;
       list.appendChild(card);
     });
   });
 }
 async function adminApproveWithdraw(key, uid, amount) {
-  if (!confirm(amount + " ETB á‰°áˆáŠ³áˆ á‰¥áˆˆáˆ… á‰³áˆ¨áŒ‹áŒáŒ£áˆˆáˆ…?")) return;
+  if (!confirm(amount + " ETB ተልኳል ብለህ ታረጋግጣለህ?")) return;
   try {
     const reqSnap = await get(ref(db, "withdrawRequests/" + key));
     const txKey   = reqSnap.exists() ? reqSnap.val().txKey : null;
@@ -1508,14 +1508,14 @@ async function adminApproveWithdraw(key, uid, amount) {
         if (Object.keys(upd).length) await update(ref(db), upd);
       }
     }
-    toast("âœ… Withdrawal marked as sent!");
+    toast("✅ Withdrawal marked as sent!");
   } catch(e) {
-    toast("âŒ Error: " + e.message);
+    toast("❌ Error: " + e.message);
   }
 }
 window.adminApproveWithdraw = adminApproveWithdraw;
 async function adminCancelWithdraw(key, uid, amount) {
-  if (!confirm("Cancel & " + amount + " ETB refund á‰³á‹°áˆ­áŒ‹áˆˆáˆ…?")) return;
+  if (!confirm("Cancel & " + amount + " ETB refund ታደርጋለህ?")) return;
   try {
     const reqSnap = await get(ref(db, "withdrawRequests/" + key));
     const txKey   = reqSnap.exists() ? reqSnap.val().txKey : null;
@@ -1541,35 +1541,36 @@ async function adminCancelWithdraw(key, uid, amount) {
     const balSnap = await get(ref(db, "users/" + uid + "/balance"));
     const cur = balSnap.exists() ? (balSnap.val() || 0) : 0;
     await update(ref(db, "users/" + uid), { balance: +(cur + amount).toFixed(2) });
-    toast("â†© Refunded " + amount + " ETB");
+    toast("↩ Refunded " + amount + " ETB");
   } catch(e) {
-    toast("âŒ Error: " + e.message);
+    toast("❌ Error: " + e.message);
   }
 }
 window.adminCancelWithdraw = adminCancelWithdraw;
 function loadAdminUsers() {
   onValue(ref(db,"users"), snap => {
     const list = $("adminUserList"); list.innerHTML = "";
-    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">áˆáŠ•áˆ user á‹¨áˆˆáˆ</div>`; return; }
+    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">ምንም user የለም</div>`; return; }
     const users = []; snap.forEach(s => users.push({uid:s.key,...s.val()}));
     users.sort((a,b)=>(b.balance||0)-(a.balance||0));
     users.forEach(u => {
       const card = document.createElement("div");
       card.className = "admin-card acard-user";
       card.innerHTML = `
-        <div class="ac-row"><div class="ac-user"><div class="ac-name">${u.name||u.username||"Unknown"}</div><div class="ac-uid">@${u.username||"â€”"} Â· ID: ${u.uid}</div></div><div class="ac-amount pos">${(u.balance||0).toFixed(2)} ETB</div></div>
-        <div class="ac-row ac-meta"><button class="ac-btn ac-approve" style="flex:1" onclick="adminAdjustBalance('${u.uid}','${u.username||u.name||u.uid}',${u.balance||0})">ðŸ’° Balance áŠ áˆµá‰°áŠ«áŠ­áˆ</button></div>
+        <div class="ac-row"><div class="ac-user"><div class="ac-name">${u.name||u.username||"Unknown"}</div><div class="ac-uid">@${u.username||"—"} · ID: ${u.uid}</div></div><div class="ac-amount pos">${(u.balance||0).toFixed(2)} ETB</div></div>
+        <div class="ac-row ac-meta"><button class="ac-btn ac-approve" style="flex:1" onclick="adminAdjustBalance('${u.uid}','${u.username||u.name||u.uid}',${u.balance||0})">💰 Balance አስተካክል</button></div>
       `;
       list.appendChild(card);
     });
   });
 }
 async function adminAdjustBalance(uid,name,cur) {
-  const val = prompt(`${name} áŠ á‹²áˆµ balance (áŠ áˆáŠ•: ${cur} ETB)`);
+  const val = prompt(`${name} አዲስ balance (አሁን: ${cur} ETB)`);
   if (val===null) return;
   const nb = parseFloat(val);
-  if (isNaN(nb)||nb<0) { toast("âš  á‰µáŠ­áŠ­áˆˆáŠ› á‰áŒ¥áˆ­"); return; }
+  if (isNaN(nb)||nb<0) { toast("⚠ ትክክለኛ ቁጥር"); return; }
   await update(ref(db,`users/${uid}`),{balance:nb});
-  toast(`âœ… Balance â†’ ${nb} ETB`);
+  toast(`✅ Balance → ${nb} ETB`);
 }
 window.adminAdjustBalance = adminAdjustBalance;
+
