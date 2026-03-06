@@ -1329,16 +1329,15 @@ function makeDepositCard(item) {
     `</div>` +
     (pend
       ? `<div class="ac-actions">` +
-          `<button class="ac-btn ac-approve" id="dep-apr-${item.key}">✅ Approve</button>` +
-          `<button class="ac-btn ac-cancel"  id="dep-cnl-${item.key}">❌ Cancel</button>` +
+          `<button class="ac-btn ac-approve">✅ Approve</button>` +
+          `<button class="ac-btn ac-cancel">❌ Cancel</button>` +
         `</div>`
       : "");
 
   if (pend) {
-    div.querySelector(`#dep-apr-${item.key}`)
-       .addEventListener("click", function() { adminApproveDeposit(item.key, item.uid, item.amount); });
-    div.querySelector(`#dep-cnl-${item.key}`)
-       .addEventListener("click", function() { adminCancelDeposit(item.key); });
+    const btns = div.querySelectorAll(".ac-actions .ac-btn");
+    btns[0].addEventListener("click", function() { adminApproveDeposit(item.key, item.uid, item.amount); });
+    btns[1].addEventListener("click", function() { adminCancelDeposit(item.key); });
   }
   return div;
 }
@@ -1438,16 +1437,15 @@ function makeWithdrawCard(item) {
     `</div>` +
     (pend
       ? `<div class="ac-actions">` +
-          `<button class="ac-btn ac-approve" id="wd-apr-${item.key}">✅ Mark Sent</button>` +
-          `<button class="ac-btn ac-cancel"  id="wd-cnl-${item.key}">❌ Refund</button>` +
+          `<button class="ac-btn ac-approve">✅ Mark Sent</button>` +
+          `<button class="ac-btn ac-cancel">❌ Refund</button>` +
         `</div>`
       : "");
 
   if (pend) {
-    div.querySelector(`#wd-apr-${item.key}`)
-       .addEventListener("click", function() { adminApproveWithdraw(item.key, item.uid, item.amount); });
-    div.querySelector(`#wd-cnl-${item.key}`)
-       .addEventListener("click", function() { adminCancelWithdraw(item.key, item.uid, item.amount); });
+    const btns = div.querySelectorAll(".ac-actions .ac-btn");
+    btns[0].addEventListener("click", function() { adminApproveWithdraw(item.key, item.uid, item.amount); });
+    btns[1].addEventListener("click", function() { adminCancelWithdraw(item.key, item.uid, item.amount); });
   }
   return div;
 }
@@ -1554,10 +1552,10 @@ function loadAdminUsers() {
           `<div class="ac-amount pos">${(u.balance || 0).toFixed(2)} ETB</div>` +
         `</div>` +
         `<div class="ac-row ac-meta">` +
-          `<button class="ac-btn ac-approve" style="flex:1" id="usr-${u.uid}">💰 Balance አስተካክል</button>` +
+          `<button class="ac-btn ac-approve" style="flex:1">💰 Balance አስተካክል</button>` +
         `</div>`;
 
-      card.querySelector(`#usr-${u.uid}`)
+      card.querySelector(".ac-btn")
          .addEventListener("click", function() {
            adminAdjustBalance(u.uid, u.name || u.username || u.uid, u.balance || 0);
          });
