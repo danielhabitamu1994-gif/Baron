@@ -40,7 +40,7 @@ const CALL_MS   = 3500;   // ms between number calls
 const COMMISSION = 0.10;  // 10%
 const MIN_REAL   = 1;     // minimum real players to start
 const MAX_PLAYERS = 20;   // maximum in a room
-const NO_PLAYER_STAKES = new Set([20, 100]);
+const NO_PLAYER_STAKES = new Set([]);
 
 const BOT_NAMES = [
   "bek***","ale**","muli**","aben***","fits**","hayl**",
@@ -50,9 +50,9 @@ const BOT_NAMES = [
 
 const STAKE_CONFIG = [
   { amount: 10,  theme: "sc-gold",   icon: "🎯", min: 7,  max: 18 },
-  { amount: 20,  theme: "sc-green",  icon: "🎲", min: 0,  max: 0  },
+  { amount: 20,  theme: "sc-green",  icon: "🎲", min: 5,  max: 15 },
   { amount: 50,  theme: "sc-cyan",   icon: "💎", min: 3,  max: 10 },
-  { amount: 100, theme: "sc-purple", icon: "👑", min: 0,  max: 0  }
+  { amount: 100, theme: "sc-purple", icon: "👑", min: 4,  max: 12 }
 ];
 
 // ===== STATE =====
@@ -505,10 +505,11 @@ function handleRoomUpdate(room, roomId) {
       scheduleGameStart(roomId, room);
     }
   } else if (room.status === "playing") {
-    if (document.getElementById("screen-lobby").classList.contains("active")) {
+    // All screens (lobby OR card-select) transition to game screen
+    if (!$("screen-game").classList.contains("active")) {
       startGameUI(room);
     }
-    // Sync called numbers
+    // Sync called numbers for every player
     syncCalledNumbers(room.calledNumbers || []);
 
     // Check if someone shouted bingo
@@ -531,7 +532,7 @@ function scheduleGameStart(roomId, room) {
   const players  = room.players ? Object.values(room.players) : [];
   const realCount = players.filter(p => !p.isBot).length;
 
-  // Add bots if < 6 total (all stakes)
+  // Add bots for all stake levels
   let allPlayers = [...players];
   if (allPlayers.length < 6) {
     const botsNeeded = Math.floor(Math.random() * (19 - 3 + 1)) + 3;
