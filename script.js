@@ -1109,7 +1109,7 @@ function loadDepositHistory() {
     container.innerHTML = "";
     if (!snap.exists()) return;
     const txs = [];
-    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+    snap.forEach(child => { txs.push({ ...child.val(), key: child.key }); });
     txs.filter(t => t.type === "deposit")
        .sort((a, b) => (b.ts || 0) - (a.ts || 0))
        .slice(0, 8)
@@ -1166,7 +1166,7 @@ function loadWithdrawHistory() {
     container.innerHTML = "";
     if (!snap.exists()) return;
     const txs = [];
-    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+    snap.forEach(child => { txs.push({ ...child.val(), key: child.key }); });
     txs.filter(t => t.type === "withdraw").reverse().slice(0, 8).forEach(t => {
       const el = document.createElement("div");
       el.className = `hist-item hist-bet ${t.status === "pending" ? "hist-pending" : ""}`;
@@ -1194,7 +1194,7 @@ async function showHistory() {
     return;
   }
   const txs = [];
-  snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+  snap.forEach(child => { txs.push({ ...child.val(), key: child.key }); });
   txs.reverse().forEach(t => {
     const el = document.createElement("div");
     const cls = t.type === "win" ? "hist-win" : t.type === "deposit" ? "hist-dep" : "hist-bet";
