@@ -1169,7 +1169,7 @@ function loadDepositHistory() {
 
     // Collect ALL children, sort newest-first, show last 10
     const txs = [];
-    snap.forEach(child => txs.push({ ...child.val(), key: child.key }));
+    snap.forEach(child => { txs.push({ ...child.val(), key: child.key }); });
 
     txs
       .sort((a, b) => (b.ts || 0) - (a.ts || 0))  // newest first
@@ -1200,7 +1200,7 @@ function loadWithdrawHistory() {
     }
 
     const txs = [];
-    snap.forEach(child => txs.push({ ...child.val(), key: child.key }));
+    snap.forEach(child => { txs.push({ ...child.val(), key: child.key }); });
 
     txs
       .filter(t => t.type === "withdraw")
@@ -1269,7 +1269,7 @@ function showHistory() {
 
     // Collect ALL transaction types, sort newest-first
     const txs = [];
-    snap.forEach(child => txs.push({ ...child.val(), key: child.key }));
+    snap.forEach(child => { txs.push({ ...child.val(), key: child.key }); });
 
     txs
       .sort((a, b) => (b.ts || 0) - (a.ts || 0))
