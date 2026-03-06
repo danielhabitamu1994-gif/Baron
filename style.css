@@ -794,6 +794,7 @@ input { outline: none; }
 .hist-amount.pos { color: var(--green); }
 .hist-amount.neg { color: var(--red); }
 .hist-status { font-size: 0.62rem; color: rgba(255,215,0,0.8); font-style: italic; }
+.hist-date { font-size: 0.6rem; color: rgba(255,255,255,0.4); margin-top: 2px; font-weight: 400; font-family: var(--font-body, sans-serif); }
 
 /* ===== CONFETTI ===== */
 .confetti-wrap {
