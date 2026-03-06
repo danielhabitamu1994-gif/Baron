@@ -1254,195 +1254,324 @@ async function init() {
 
 init();
 
+
 // ===== ADMIN PANEL =====
+// Uses event delegation — works correctly inside ES modules
+
+function isPending(status) {
+  return !status || status === "pending";
+}
+
 function loadAdminPanel() {
+  loadAdminStats();
   loadAdminDeposits();
   loadAdminWithdraws();
   loadAdminUsers();
-  loadAdminStats();
 }
+
 function adminTab(tab) {
   ["deposit","withdraw","users"].forEach(t => {
-    const p = $(`adminPanel${t.charAt(0).toUpperCase()+t.slice(1)}`);
-    const b = $(`tab${t.charAt(0).toUpperCase()+t.slice(1)}`);
-    if (p) p.style.display = t === tab ? "block" : "none";
-    if (b) b.classList.toggle("active", t === tab);
+    const panel = document.getElementById("adminPanel" + t.charAt(0).toUpperCase() + t.slice(1));
+    const btn   = document.getElementById("tab"   + t.charAt(0).toUpperCase() + t.slice(1));
+    if (panel) panel.style.display = (t === tab) ? "block" : "none";
+    if (btn)   btn.classList.toggle("active", t === tab);
   });
 }
 window.adminTab = adminTab;
+
+// ---- STATS ----
 function loadAdminStats() {
-  onValue(ref(db,"depositRequests"), snap => {
-    let c=0; snap.forEach(s=>{ const st=s.val().status; if(!st||st==="pending") c++; });
-    $("adminPendingDep").textContent = c;
+  onValue(ref(db, "depositRequests"), snap => {
+    let c = 0;
+    if (snap.exists()) snap.forEach(s => { if (isPending(s.val().status)) c++; });
+    document.getElementById("adminPendingDep").textContent = c;
   });
-  onValue(ref(db,"withdrawRequests"), snap => {
-    let c=0; snap.forEach(s=>{ const st=s.val().status; if(!st||st==="pending") c++; });
-    $("adminPendingWd").textContent = c;
+  onValue(ref(db, "withdrawRequests"), snap => {
+    let c = 0;
+    if (snap.exists()) snap.forEach(s => { if (isPending(s.val().status)) c++; });
+    document.getElementById("adminPendingWd").textContent = c;
   });
-  onValue(ref(db,"users"), snap => {
-    $("adminTotalUsers").textContent = snap.exists() ? Object.keys(snap.val()).length : 0;
+  onValue(ref(db, "users"), snap => {
+    document.getElementById("adminTotalUsers").textContent =
+      snap.exists() ? Object.keys(snap.val()).length : 0;
   });
 }
+
+// ---- DEPOSITS ----
+function renderDepositCard(item) {
+  const pend = isPending(item.status);
+  const statusLabel = pend ? "⏳ Pending"
+    : item.status === "approved" ? "✅ Approved" : "❌ Cancelled";
+  const statusClass = pend ? "st-pending"
+    : item.status === "approved" ? "st-approved" : "st-cancelled";
+  const cardClass = pend ? "acard-pending"
+    : item.status === "approved" ? "acard-approved" : "acard-cancelled";
+
+  const card = document.createElement("div");
+  card.className = "admin-card " + cardClass;
+  card.dataset.key    = item.key;
+  card.dataset.uid    = item.uid;
+  card.dataset.amount = item.amount;
+
+  card.innerHTML = `
+    <div class="ac-row">
+      <div class="ac-user">
+        <div class="ac-name">@${item.username || "unknown"}</div>
+        <div class="ac-uid">ID: ${item.uid}</div>
+      </div>
+      <div class="ac-amount pos">+${item.amount} ETB</div>
+    </div>
+    <div class="ac-row ac-meta">
+      <span>📱 SMS: <b>${item.sms || "—"}</b></span>
+      <span class="ac-status ${statusClass}">${statusLabel}</span>
+    </div>
+    ${pend ? `
+    <div class="ac-actions">
+      <button class="ac-btn ac-approve" data-action="dep-approve">✅ Approve</button>
+      <button class="ac-btn ac-cancel"  data-action="dep-cancel">❌ Cancel</button>
+    </div>` : ""}
+  `;
+
+  if (pend) {
+    card.querySelector('[data-action="dep-approve"]')
+      .addEventListener("click", () => adminApproveDeposit(item.key, item.uid, item.amount));
+    card.querySelector('[data-action="dep-cancel"]')
+      .addEventListener("click", () => adminCancelDeposit(item.key));
+  }
+  return card;
+}
+
 function loadAdminDeposits() {
-  onValue(ref(db,"depositRequests"), snap => {
-    const list = $("adminDepositList");
+  onValue(ref(db, "depositRequests"), snap => {
+    const list = document.getElementById("adminDepositList");
     if (!list) return;
     list.innerHTML = "";
+
     if (!snap.exists()) {
       list.innerHTML = '<div class="admin-empty">ምንም deposit request የለም</div>';
       return;
     }
+
     const items = [];
     snap.forEach(s => items.push({ key: s.key, ...s.val() }));
-    const isPend = s => !s.status || s.status === "pending";
+
+    // Sort: pending first, then by timestamp desc
     items.sort((a, b) => {
-      if (isPend(a) && !isPend(b)) return -1;
-      if (isPend(b) && !isPend(a)) return 1;
+      const ap = isPending(a.status) ? 0 : 1;
+      const bp = isPending(b.status) ? 0 : 1;
+      if (ap !== bp) return ap - bp;
       return (b.ts || 0) - (a.ts || 0);
     });
-    items.forEach(item => {
-      const isPending = isPend(item);
-      const card = document.createElement("div");
-      card.className = "admin-card " + (isPending ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled");
 
-      card.innerHTML = `
-        <div class="ac-row">
-          <div class="ac-user">
-            <div class="ac-name">@${item.username || "unknown"}</div>
-            <div class="ac-uid">ID: ${item.uid}</div>
-          </div>
-          <div class="ac-amount pos">+${item.amount} ETB</div>
-        </div>
-        <div class="ac-row ac-meta">
-          <span>📱 SMS: <b>${item.sms || "—"}</b></span>
-          <span class="ac-status ${isPending ? "st-pending" : item.status === "approved" ? "st-approved" : "st-cancelled"}">
-            ${isPending ? "⏳ Pending" : item.status === "approved" ? "✅ Approved" : "❌ Cancelled"}
-          </span>
-        </div>
-        ${isPending ? `
-        <div class="ac-actions">
-          <button class="ac-btn ac-approve" data-key="${item.key}" data-uid="${item.uid}" data-amount="${item.amount}" data-action="dep-approve">✅ Approve</button>
-          <button class="ac-btn ac-cancel"  data-key="${item.key}" data-uid="${item.uid}" data-amount="${item.amount}" data-action="dep-cancel">❌ Cancel</button>
-        </div>` : ""}
-      `;
-      // Attach event listeners via data attributes (safe in ES modules)
-      if (isPending) {
-        card.querySelector('[data-action="dep-approve"]').addEventListener('click', () =>
-          adminApproveDeposit(item.key, item.uid, item.amount));
-        card.querySelector('[data-action="dep-cancel"]').addEventListener('click', () =>
-          adminCancelDeposit(item.key));
-      }
-      list.appendChild(card);
-    });
+    items.forEach(item => list.appendChild(renderDepositCard(item)));
   });
 }
+
 async function adminApproveDeposit(key, uid, amount) {
   if (!confirm(`${amount} ETB approve ታደርጋለህ?`)) return;
-  await update(ref(db,`depositRequests/${key}`), {status:"approved"});
-  const txSnap = await get(ref(db,`users/${uid}/transactions`));
-  if (txSnap.exists()) txSnap.forEach(s => { const t=s.val(); if(t.type==="deposit"&&t.status==="pending"&&t.amount===amount) update(ref(db,`users/${uid}/transactions/${s.key}`),{status:"approved"}); });
-  const balSnap = await get(ref(db,`users/${uid}/balance`));
-  const cur = balSnap.exists() ? (balSnap.val()||0) : 0;
-  await update(ref(db,`users/${uid}`), {balance:+(cur+amount).toFixed(2)});
-  toast(`✅ ${amount} ETB approved!`);
+  try {
+    // 1. Mark deposit request approved
+    await update(ref(db, `depositRequests/${key}`), { status: "approved" });
+
+    // 2. Mark user's matching transaction approved
+    const txSnap = await get(ref(db, `users/${uid}/transactions`));
+    if (txSnap.exists()) {
+      const updates = {};
+      txSnap.forEach(s => {
+        const t = s.val();
+        if (t.type === "deposit" && isPending(t.status) && t.amount === amount) {
+          updates[`users/${uid}/transactions/${s.key}/status`] = "approved";
+        }
+      });
+      if (Object.keys(updates).length) await update(ref(db), updates);
+    }
+
+    // 3. Credit user balance
+    const balSnap = await get(ref(db, `users/${uid}/balance`));
+    const cur = balSnap.exists() ? (balSnap.val() || 0) : 0;
+    await update(ref(db, `users/${uid}`), { balance: +(cur + amount).toFixed(2) });
+
+    toast("✅ " + amount + " ETB approved! ሂሳቡ ወደ ተጠቃሚው ተጨምሯል");
+  } catch(e) {
+    toast("❌ Error: " + e.message);
+  }
 }
-window.adminApproveDeposit = adminApproveDeposit;
+
 async function adminCancelDeposit(key) {
-  if (!confirm("Cancel?")) return;
-  await update(ref(db,`depositRequests/${key}`), {status:"cancelled"});
-  toast("❌ Cancelled.");
+  if (!confirm("ይህን deposit request ሰርዝ?")) return;
+  try {
+    await update(ref(db, `depositRequests/${key}`), { status: "cancelled" });
+    toast("❌ Deposit cancelled.");
+  } catch(e) {
+    toast("❌ Error: " + e.message);
+  }
 }
-window.adminCancelDeposit = adminCancelDeposit;
+
+// ---- WITHDRAWALS ----
+function renderWithdrawCard(item) {
+  const pend = isPending(item.status);
+  const statusLabel = pend ? "⏳ Pending"
+    : item.status === "approved" ? "✅ Sent" : "❌ Cancelled";
+  const statusClass = pend ? "st-pending"
+    : item.status === "approved" ? "st-approved" : "st-cancelled";
+  const cardClass = pend ? "acard-pending"
+    : item.status === "approved" ? "acard-approved" : "acard-cancelled";
+
+  const card = document.createElement("div");
+  card.className = "admin-card " + cardClass;
+
+  card.innerHTML = `
+    <div class="ac-row">
+      <div class="ac-user">
+        <div class="ac-name">@${item.username || "unknown"}</div>
+        <div class="ac-uid">ID: ${item.uid}</div>
+      </div>
+      <div class="ac-amount neg">-${item.amount} ETB</div>
+    </div>
+    <div class="ac-row ac-meta">
+      <span>📱 ${item.phone || "—"}</span>
+      <span>💸 Payout: ${item.payout || item.amount} ETB</span>
+      <span class="ac-status ${statusClass}">${statusLabel}</span>
+    </div>
+    ${pend ? `
+    <div class="ac-actions">
+      <button class="ac-btn ac-approve" data-action="wd-approve">✅ Mark Sent</button>
+      <button class="ac-btn ac-cancel"  data-action="wd-cancel">❌ Refund</button>
+    </div>` : ""}
+  `;
+
+  if (pend) {
+    card.querySelector('[data-action="wd-approve"]')
+      .addEventListener("click", () => adminApproveWithdraw(item.key, item.uid, item.amount));
+    card.querySelector('[data-action="wd-cancel"]')
+      .addEventListener("click", () => adminCancelWithdraw(item.key, item.uid, item.amount));
+  }
+  return card;
+}
+
 function loadAdminWithdraws() {
-  onValue(ref(db,"withdrawRequests"), snap => {
-    const list = $("adminWithdrawList");
+  onValue(ref(db, "withdrawRequests"), snap => {
+    const list = document.getElementById("adminWithdrawList");
     if (!list) return;
     list.innerHTML = "";
-    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">ምንም withdrawal የለም</div>`; return; }
-    const items = []; snap.forEach(s => items.push({key:s.key,...s.val()}));
-    items.sort((a,b) => {
-      if (a.status === "pending" && b.status !== "pending") return -1;
-      if (b.status === "pending" && a.status !== "pending") return 1;
-      return (b.ts||0)-(a.ts||0);
+
+    if (!snap.exists()) {
+      list.innerHTML = '<div class="admin-empty">ምንም withdrawal request የለም</div>';
+      return;
+    }
+
+    const items = [];
+    snap.forEach(s => items.push({ key: s.key, ...s.val() }));
+
+    items.sort((a, b) => {
+      const ap = isPending(a.status) ? 0 : 1;
+      const bp = isPending(b.status) ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      return (b.ts || 0) - (a.ts || 0);
     });
-    items.forEach(item => {
-      const isPending = !item.status || item.status === "pending";
-      const card = document.createElement("div");
-      card.className = `admin-card ${isPending ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled"}`;
-      card.innerHTML = `
-        <div class="ac-row">
-          <div class="ac-user">
-            <div class="ac-name">@${item.username || "unknown"}</div>
-            <div class="ac-uid">ID: ${item.uid}</div>
-          </div>
-          <div class="ac-amount neg">-${item.amount} ETB</div>
-        </div>
-        <div class="ac-row ac-meta">
-          <span>📱 ${item.phone || "—"}</span>
-          <span>💸 ${item.payout || item.amount} ETB (after 5% fee)</span>
-          <span class="ac-status ${isPending ? "st-pending" : item.status === "approved" ? "st-approved" : "st-cancelled"}">
-            ${isPending ? "⏳ Pending" : item.status === "approved" ? "✅ Sent" : "❌ Cancelled"}
-          </span>
-        </div>
-        ${isPending ? `
-        <div class="ac-actions">
-          <button class="ac-btn ac-approve" data-key="${item.key}" data-uid="${item.uid}" data-amount="${item.amount}" data-action="wd-approve">✅ Mark Sent</button>
-          <button class="ac-btn ac-cancel"  data-key="${item.key}" data-uid="${item.uid}" data-amount="${item.amount}" data-action="wd-cancel">❌ Refund</button>
-        </div>` : ""}
-      `;
-      if (isPending) {
-        card.querySelector('[data-action="wd-approve"]').addEventListener('click', () =>
-          adminApproveWithdraw(item.key, item.uid, item.amount));
-        card.querySelector('[data-action="wd-cancel"]').addEventListener('click', () =>
-          adminCancelWithdraw(item.key, item.uid, item.amount));
-      }
-      list.appendChild(card);
-    });
+
+    items.forEach(item => list.appendChild(renderWithdrawCard(item)));
   });
 }
-async function adminApproveWithdraw(key,uid,amount) {
-  if (!confirm(`Confirm sent ${amount} ETB?`)) return;
-  await update(ref(db,`withdrawRequests/${key}`),{status:"approved"});
-  const txSnap = await get(ref(db,`users/${uid}/transactions`));
-  if (txSnap.exists()) txSnap.forEach(s => { const t=s.val(); if(t.type==="withdraw"&&t.status==="pending"&&t.amount===amount) update(ref(db,`users/${uid}/transactions/${s.key}`),{status:"approved"}); });
-  toast("✅ Withdrawal confirmed!");
+
+async function adminApproveWithdraw(key, uid, amount) {
+  if (!confirm(`${amount} ETB sent ታረጋግጣለህ?`)) return;
+  try {
+    await update(ref(db, `withdrawRequests/${key}`), { status: "approved" });
+
+    const txSnap = await get(ref(db, `users/${uid}/transactions`));
+    if (txSnap.exists()) {
+      const updates = {};
+      txSnap.forEach(s => {
+        const t = s.val();
+        if (t.type === "withdraw" && isPending(t.status) && t.amount === amount) {
+          updates[`users/${uid}/transactions/${s.key}/status`] = "approved";
+        }
+      });
+      if (Object.keys(updates).length) await update(ref(db), updates);
+    }
+
+    toast("✅ Withdrawal marked as sent!");
+  } catch(e) {
+    toast("❌ Error: " + e.message);
+  }
 }
-window.adminApproveWithdraw = adminApproveWithdraw;
-async function adminCancelWithdraw(key,uid,amount) {
+
+async function adminCancelWithdraw(key, uid, amount) {
   if (!confirm(`Cancel & refund ${amount} ETB?`)) return;
-  await update(ref(db,`withdrawRequests/${key}`),{status:"cancelled"});
-  const txSnap = await get(ref(db,`users/${uid}/transactions`));
-  if (txSnap.exists()) txSnap.forEach(s => { const t=s.val(); if(t.type==="withdraw"&&t.status==="pending"&&t.amount===amount) update(ref(db,`users/${uid}/transactions/${s.key}`),{status:"cancelled"}); });
-  const balSnap = await get(ref(db,`users/${uid}/balance`));
-  const cur = balSnap.exists()?(balSnap.val()||0):0;
-  await update(ref(db,`users/${uid}`),{balance:+(cur+amount).toFixed(2)});
-  toast(`↩ Refunded ${amount} ETB`);
+  try {
+    await update(ref(db, `withdrawRequests/${key}`), { status: "cancelled" });
+
+    const txSnap = await get(ref(db, `users/${uid}/transactions`));
+    if (txSnap.exists()) {
+      const updates = {};
+      txSnap.forEach(s => {
+        const t = s.val();
+        if (t.type === "withdraw" && isPending(t.status) && t.amount === amount) {
+          updates[`users/${uid}/transactions/${s.key}/status`] = "cancelled";
+        }
+      });
+      if (Object.keys(updates).length) await update(ref(db), updates);
+    }
+
+    // Refund balance
+    const balSnap = await get(ref(db, `users/${uid}/balance`));
+    const cur = balSnap.exists() ? (balSnap.val() || 0) : 0;
+    await update(ref(db, `users/${uid}`), { balance: +(cur + amount).toFixed(2) });
+
+    toast("↩ Refunded " + amount + " ETB to user");
+  } catch(e) {
+    toast("❌ Error: " + e.message);
+  }
 }
-window.adminCancelWithdraw = adminCancelWithdraw;
+
+// ---- USERS ----
 function loadAdminUsers() {
-  onValue(ref(db,"users"), snap => {
-    const list = $("adminUserList"); list.innerHTML = "";
-    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">ምንም user የለም</div>`; return; }
-    const users = []; snap.forEach(s => users.push({uid:s.key,...s.val()}));
-    users.sort((a,b)=>(b.balance||0)-(a.balance||0));
+  onValue(ref(db, "users"), snap => {
+    const list = document.getElementById("adminUserList");
+    if (!list) return;
+    list.innerHTML = "";
+
+    if (!snap.exists()) {
+      list.innerHTML = '<div class="admin-empty">ምንም user የለም</div>';
+      return;
+    }
+
+    const users = [];
+    snap.forEach(s => users.push({ uid: s.key, ...s.val() }));
+    users.sort((a, b) => (b.balance || 0) - (a.balance || 0));
+
     users.forEach(u => {
       const card = document.createElement("div");
       card.className = "admin-card acard-user";
       card.innerHTML = `
-        <div class="ac-row"><div class="ac-user"><div class="ac-name">${u.name||u.username||"Unknown"}</div><div class="ac-uid">@${u.username||"—"} · ID: ${u.uid}</div></div><div class="ac-amount pos">${(u.balance||0).toFixed(2)} ETB</div></div>
-        <div class="ac-row ac-meta"><button class="ac-btn ac-approve" style="flex:1" onclick="adminAdjustBalance('${u.uid}','${u.username||u.name||u.uid}',${u.balance||0})">💰 Balance አስተካክል</button></div>
+        <div class="ac-row">
+          <div class="ac-user">
+            <div class="ac-name">${u.name || u.username || "Unknown"}</div>
+            <div class="ac-uid">@${u.username || "—"} · ID: ${u.uid}</div>
+          </div>
+          <div class="ac-amount pos">${(u.balance || 0).toFixed(2)} ETB</div>
+        </div>
+        <div class="ac-row ac-meta">
+          <button class="ac-btn ac-approve" style="flex:1" data-action="adjust">💰 Balance አስተካክል</button>
+        </div>
       `;
+      card.querySelector('[data-action="adjust"]')
+        .addEventListener("click", () => adminAdjustBalance(u.uid, u.name || u.username || u.uid, u.balance || 0));
       list.appendChild(card);
     });
   });
 }
-async function adminAdjustBalance(uid,name,cur) {
-  const val = prompt(`${name} አዲስ balance (አሁን: ${cur} ETB)`);
-  if (val===null) return;
-  const nb = parseFloat(val);
-  if (isNaN(nb)||nb<0) { toast("⚠ ትክክለኛ ቁጥር"); return; }
-  await update(ref(db,`users/${uid}`),{balance:nb});
-  toast(`✅ Balance → ${nb} ETB`);
-}
-window.adminAdjustBalance = adminAdjustBalance;
 
+async function adminAdjustBalance(uid, name, cur) {
+  const val = prompt(`${name}\nአዲስ balance (አሁን: ${cur} ETB):`);
+  if (val === null) return;
+  const nb = parseFloat(val);
+  if (isNaN(nb) || nb < 0) { toast("⚠ ትክክለኛ ቁጥር ያስገቡ"); return; }
+  try {
+    await update(ref(db, `users/${uid}`), { balance: nb });
+    toast(`✅ Balance → ${nb} ETB`);
+  } catch(e) {
+    toast("❌ Error: " + e.message);
+  }
+}
