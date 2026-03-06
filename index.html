@@ -34,10 +34,6 @@
           <span class="mnb-icon">📥</span>
           <span>ገንዘብ ያስገቡ (Deposit)</span>
         </button>
-        <button class="menu-nav-btn" onclick="openWithdraw(); closeMenu()">
-          <span class="mnb-icon">📤</span>
-          <span>ገንዘብ ያውጡ (Withdraw)</span>
-        </button>
         <button class="menu-nav-btn" onclick="showHistory(); closeMenu()">
           <span class="mnb-icon">📋</span>
           <span>የግብይት ታሪክ</span>
@@ -60,7 +56,7 @@
       <span></span><span></span><span></span>
     </button>
     <div class="top-logo">BARON<span>BINGO</span></div>
-    <div class="top-balance" onclick="openWalletModal()">
+    <div class="top-balance" onclick="openDeposit()">
       <span class="tb-coin">💰</span>
       <span id="topBalance">0</span>
     </div>
@@ -117,6 +113,7 @@
           <div class="gtb-players" id="gtbPlayers">👥 6</div>
         </div>
         <div class="gtb-prize" id="gtbPrize">🏆 0 ETB</div>
+        <div class="gtb-call-count" id="gtbCallCount">Call 0/20</div>
         <button class="gtb-leave" onclick="leaveGame()">Exit</button>
       </div>
 
@@ -208,87 +205,6 @@
       </div>
     </section>
 
-    <!-- ===== SCREEN: WITHDRAW ===== -->
-    <section class="screen" id="screen-withdraw">
-      <div class="sub-header">
-        <button class="back-btn" onclick="goHome()">❮</button>
-        <div class="sub-title">Withdraw</div>
-        <div class="sub-badge" style="background:rgba(255,165,0,0.2);color:#ffa500;">TeleBirr</div>
-      </div>
-      <div class="deposit-card">
-        <div class="dc-title">📤 ገንዘብ ማውጫ</div>
-
-        <div class="withdraw-balance-box">
-          <span class="wbb-label">የሚወጣ ቀሪ ሂሳብ</span>
-          <span class="wbb-amount" id="withdrawBalanceDisplay">0 ETB</span>
-        </div>
-
-        <div class="dc-field-label">TeleBirr ቁጥር (ገንዘቡ የሚሄድበት)</div>
-        <input type="tel" class="dc-input" id="wdPhone" placeholder="09XXXXXXXX" maxlength="10" />
-
-        <div class="dc-field-label">የሚወጣ የብር መጠን (ቢያንስ 50 ETB)</div>
-        <input type="number" class="dc-input" id="wdAmount" placeholder="100" min="50" />
-
-        <div class="withdraw-note">
-          <span>⚠</span>
-          <span>ጥያቄ ከላኩ በኋላ ከ24 ሰዓት ውስጥ ወደ TeleBirr ይደርሳል። 5% የአገልግሎት ክፍያ ይቀነሳል።</span>
-        </div>
-
-        <button class="cta-btn withdraw-cta" onclick="submitWithdraw()">📤 ጥያቄ ላክ</button>
-      </div>
-
-      <div class="history-section">
-        <div class="hs-title">📋 የቅርብ ጊዜ የወጣ ገንዘብ</div>
-        <div id="withdrawHistory"></div>
-      </div>
-    </section>
-
-    <!-- ===== SCREEN: ADMIN ===== -->
-    <section class="screen" id="screen-admin">
-      <div class="sub-header">
-        <div class="sub-title">👑 Admin Panel</div>
-        <div class="sub-badge" style="background:rgba(255,0,0,0.2);color:#ff4444;">Baron Bingo</div>
-      </div>
-
-      <!-- Admin Stats -->
-      <div class="admin-stats-row">
-        <div class="admin-stat-box">
-          <div class="asb-val" id="adminTotalUsers">—</div>
-          <div class="asb-lbl">ተጫዋቾች</div>
-        </div>
-        <div class="admin-stat-box">
-          <div class="asb-val" id="adminPendingDep">—</div>
-          <div class="asb-lbl">Pending Deposit</div>
-        </div>
-        <div class="admin-stat-box">
-          <div class="asb-val" id="adminPendingWd">—</div>
-          <div class="asb-lbl">Pending Withdraw</div>
-        </div>
-      </div>
-
-      <!-- Tabs -->
-      <div class="admin-tabs">
-        <button class="admin-tab active" id="tabDeposit" onclick="adminTab('deposit')">📥 Deposits</button>
-        <button class="admin-tab" id="tabWithdraw" onclick="adminTab('withdraw')">📤 Withdrawals</button>
-        <button class="admin-tab" id="tabUsers" onclick="adminTab('users')">👥 Users</button>
-      </div>
-
-      <!-- Deposit Requests -->
-      <div class="admin-panel" id="adminPanelDeposit">
-        <div id="adminDepositList" class="admin-list"></div>
-      </div>
-
-      <!-- Withdraw Requests -->
-      <div class="admin-panel" id="adminPanelWithdraw" style="display:none">
-        <div id="adminWithdrawList" class="admin-list"></div>
-      </div>
-
-      <!-- Users -->
-      <div class="admin-panel" id="adminPanelUsers" style="display:none">
-        <div id="adminUserList" class="admin-list"></div>
-      </div>
-    </section>
-
     <!-- ===== SCREEN: TRANSACTION HISTORY ===== -->
     <section class="screen" id="screen-history">
       <div class="sub-header">
@@ -299,34 +215,6 @@
     </section>
 
   </main>
-
-  <!-- WALLET MODAL -->
-  <div class="wallet-modal-overlay" id="walletModalOverlay" onclick="closeWalletModal()"></div>
-  <div class="wallet-modal" id="walletModal">
-    <div class="wm-inner">
-      <div class="wm-header">
-        <span class="wm-label">ሂሳብ አስተዳደር</span>
-        <button class="wm-close-btn" onclick="closeWalletModal()">✕</button>
-      </div>
-      <div class="wm-balance-row">
-        <span class="wm-coin">💰</span>
-        <span class="wm-balance" id="wmBalance">0</span>
-        <span class="wm-curr-tag">ETB</span>
-      </div>
-      <div class="wm-buttons">
-        <button class="wm-btn wm-deposit" onclick="closeWalletModal(); openDeposit()">
-          <span class="wm-btn-icon">📥</span>
-          <span class="wm-btn-name">Deposit</span>
-          <span class="wm-btn-sub">ገንዘብ ያስገቡ</span>
-        </button>
-        <button class="wm-btn wm-withdraw" onclick="closeWalletModal(); openWithdraw()">
-          <span class="wm-btn-icon">📤</span>
-          <span class="wm-btn-name">Withdraw</span>
-          <span class="wm-btn-sub">ገንዘብ ያውጡ</span>
-        </button>
-      </div>
-    </div>
-  </div>
 
   <!-- Confetti container -->
   <div class="confetti-wrap" id="confettiWrap"></div>
