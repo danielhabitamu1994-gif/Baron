@@ -917,7 +917,7 @@ async function shoutBingo() {
   const txRef = push(ref(db, `users/${UID}/transactions`));
   await set(txRef, {
     type: "win", amount: prize, roomId: currentRoomId,
-    stake: room.stake, ts: Date.now()
+    stake: room.stake, ts: serverTimestamp()
   });
 
   if (callerInterval) { clearInterval(callerInterval); callerInterval = null; }
@@ -1067,158 +1067,158 @@ async function submitDeposit() {
   if (!amt || amt < 50) { toast("⚠ ቢያንስ 50 ETB ያስገቡ!"); return; }
   if (!sms) { toast("⚠ SMS ማረጋገጫ ያስፈልጋል!"); return; }
 
-  // Save pending request to Firebase — push() guarantees a unique key every time
-  const nowTs = Date.now();
+  // Push to user transactions — capture key for admin sync
   const txRef = push(ref(db, `users/${UID}/transactions`));
   const txKey = txRef.key;
   await set(txRef, {
-    type: "deposit",
-    status: "pending",
-    amount: amt,
+    type:     "deposit",
+    status:   "pending",
+    amount:   amt,
     sms,
-    uid: UID,
+    uid:      UID,
     username: tgUser.username || myUsername,
-    ts: nowTs           // numeric ms — sortable immediately, no server round-trip needed
+    ts:       serverTimestamp()
   });
 
-  // Save to admin deposits node — push() so every deposit gets its own entry
-  const adminRef = push(ref(db, `depositRequests`));
+  // Push to admin node — store txKey to enable precise sync
+  const adminRef = push(ref(db, "depositRequests"));
   await set(adminRef, {
-    uid: UID,
-    txKey,              // link back to user transaction for status sync
+    uid:      UID,
     username: tgUser.username || myUsername,
-    name: `${tgUser.first_name||""} ${tgUser.last_name||""}`.trim(),
-    amount: amt,
+    name:     (tgUser.first_name || "") + " " + (tgUser.last_name || ""),
+    amount:   amt,
     sms,
-    status: "pending",
-    ts: nowTs
+    status:   "pending",
+    txKey:    txKey,
+    ts:       serverTimestamp()
   });
 
   $("depAmount").value = "";
-  $("depSms").value = "";
+  $("depSms").value    = "";
   toast("✅ ጥያቄዎ ተልኳል! ከ admin ማረጋገጫ ይጠብቁ");
-  loadDepositHistory();
 }
 window.submitDeposit = submitDeposit;
 
-// ===== DATE FORMATTER (Ethiopian local time) =====
-function fmtDate(ts) {
-  if (!ts || isNaN(ts)) return "";
-  try {
-    return new Date(ts).toLocaleString("am-ET", {
-      timeZone: "Africa/Addis_Ababa",
-      day: "2-digit", month: "short",
-      hour: "2-digit", minute: "2-digit"
-    });
-  } catch(e) {
-    return new Date(ts).toLocaleString();
-  }
+// Single persistent listener — started once at app init, never re-created
+// ===== TRANSACTION HISTORY HELPERS =====
+function _fmtDate(ts) {
+  if (!ts) return "";
+  const d = new Date(typeof ts === "number" ? ts : Date.now());
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const mo  = months[d.getMonth()];
+  const day = d.getDate();
+  const yr  = d.getFullYear();
+  let   hr  = d.getHours();
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const ampm = hr >= 12 ? "PM" : "AM";
+  hr = hr % 12 || 12;
+  return mo + " " + day + ", " + yr + " · " + hr + ":" + min + " " + ampm;
 }
 
-// ===== SHARED TRANSACTION CARD BUILDER =====
-function buildTxCard(t) {
-  const isPos    = t.type === "win" || t.type === "deposit";
-  const icons    = { win:"🏆", deposit:"📥", withdraw:"📤", stake:"🎯" };
-  const labels   = { win:"ድል", deposit:"Deposit", withdraw:"Withdraw", stake:"Stake" };
-  const icon     = icons[t.type]  || "🔄";
-  const label    = labels[t.type] || t.type;
-  const typeClass = t.type === "win" ? "hist-win"
-                  : t.type === "deposit" ? "hist-dep"
-                  : "hist-bet";
-  const detail   = t.type === "withdraw" && t.phone ? ` → ${t.phone}`
-                 : t.stake ? ` (stake: ${t.stake} ETB)` : "";
+function _buildHistItem(t) {
+  const isDeposit  = t.type === "deposit";
+  const isWithdraw = t.type === "withdraw";
+  const isWin      = t.type === "win";
+  const isStake    = t.type === "stake" || (!isDeposit && !isWithdraw && !isWin);
+
+  const isPending   = !t.status || t.status === "pending";
+  const isApproved  = t.status === "approved";
+  const isCancelled = t.status === "cancelled";
 
   const el = document.createElement("div");
-  el.className = `hist-item ${typeClass}${t.status === "pending" ? " hist-pending" : ""}`;
-  el.innerHTML = `
-    <div class="hist-label">
-      ${icon} ${label}${detail}
-      <div class="hist-date">${fmtDate(t.ts)}</div>
-    </div>
-    <div class="hist-right">
-      <div class="hist-amount ${isPos ? "pos" : "neg"}">${isPos ? "+" : "-"}${t.amount} ETB</div>
-      ${t.status === "pending"
-        ? `<div class="hist-status">⏳ Pending...</div>`
-        : t.status === "approved"
-        ? `<div class="hist-status approved">✅ Approved</div>`
-        : t.status === "cancelled"
-        ? `<div class="hist-status cancelled">❌ Cancelled</div>`
-        : ""}
-    </div>`;
+  let borderColor, icon, label, amountText, amountClass;
+
+  if (isDeposit) {
+    borderColor = isPending ? "#ffa500" : isApproved ? "#00c853" : "#ff4444";
+    icon        = "📥";
+    label       = "Deposit";
+    amountText  = "+" + t.amount + " ETB";
+    amountClass = "pos";
+  } else if (isWithdraw) {
+    borderColor = isPending ? "#ffa500" : isApproved ? "#00b4d8" : "#ff4444";
+    icon        = "📤";
+    label       = "Withdraw · " + (t.phone || "");
+    amountText  = "-" + t.amount + " ETB";
+    amountClass = "neg";
+  } else if (isWin) {
+    borderColor = "#ffd700";
+    icon        = "🏆";
+    label       = "ድል · " + (t.stake || t.amount) + " ETB stake";
+    amountText  = "+" + t.amount + " ETB";
+    amountClass = "pos";
+  } else {
+    borderColor = "#ff4444";
+    icon        = "🎯";
+    label       = "Stake · " + (t.stake || t.amount) + " ETB";
+    amountText  = "-" + (t.stake || t.amount) + " ETB";
+    amountClass = "neg";
+  }
+
+  el.className = "hist-item";
+  el.style.borderLeftColor = borderColor;
+
+  // Left side: icon + label + date
+  const left = document.createElement("div");
+  left.className = "hist-left";
+
+  const labelRow = document.createElement("div");
+  labelRow.className = "hist-label";
+  labelRow.textContent = icon + " " + label;
+  left.appendChild(labelRow);
+
+  const dateRow = document.createElement("div");
+  dateRow.className = "hist-date";
+  dateRow.textContent = _fmtDate(t.ts);
+  left.appendChild(dateRow);
+
+  // Right side: amount + status badge
+  const right = document.createElement("div");
+  right.className = "hist-right";
+
+  const amountEl = document.createElement("div");
+  amountEl.className = "hist-amount " + amountClass;
+  amountEl.textContent = amountText;
+  right.appendChild(amountEl);
+
+  if (isDeposit || isWithdraw) {
+    const badge = document.createElement("div");
+    if (isPending) {
+      badge.className = "hist-badge hist-badge-pending";
+      badge.textContent = "⏳ Pending";
+    } else if (isApproved) {
+      badge.className = "hist-badge hist-badge-approved";
+      badge.textContent = isWithdraw ? "✅ Sent" : "✅ Approved";
+    } else if (isCancelled) {
+      badge.className = "hist-badge hist-badge-cancelled";
+      badge.textContent = "❌ Cancelled";
+    }
+    right.appendChild(badge);
+  }
+
+  el.appendChild(left);
+  el.appendChild(right);
   return el;
 }
 
-// ===== DEPOSIT HISTORY =====
-// One persistent onValue listener — started once, re-renders on every DB change.
-// Calling loadDepositHistory() multiple times is safe; listener is only registered once.
-let _depHistUnsubscribe = null;
+let _depHistStarted = false;
 function loadDepositHistory() {
-  if (_depHistUnsubscribe) return; // already live
-
-  _depHistUnsubscribe = onValue(ref(db, `users/${UID}/transactions`), snap => {
+  if (_depHistStarted) return;
+  _depHistStarted = true;
+  onValue(ref(db, `users/${UID}/transactions`), snap => {
     const container = $("depositHistory");
     if (!container) return;
-
-    // ── Clear first — this is what prevents the "only first item" bug ──
-    container.innerHTML = "";
-
-    if (!snap.exists()) {
-      container.innerHTML = `<div class="hist-empty">ምንም ግብይት የለም</div>`;
-      return;
-    }
-
-    // Collect ALL children, sort newest-first, show last 10
-    // እዚህ ጋር ቀይረው
-onValue(ref(db, `deposits/${tgUser.id}`), (snap) => {
-  const rawData = snap.val();
-  const txs = rawData ? Object.keys(rawData).map(k => ({ ...rawData[k], key: k })) : [];
-  // የተቀረው ኮድ ይቀጥላል...
-
-
-    txs
-      .sort((a, b) => (b.ts || 0) - (a.ts || 0))  // newest first
-      .slice(0, 10)
-      .forEach(t => container.appendChild(buildTxCard(t)));
+    while (container.firstChild) container.removeChild(container.firstChild);
+    if (!snap.exists()) return;
+    const txs = [];
+    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+    txs.filter(t => t.type === "deposit")
+       .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+       .slice(0, 10)
+       .forEach(t => container.appendChild(_buildHistItem(t)));
   });
 }
 
-// ===== WITHDRAW HISTORY =====
-// Same pattern — one persistent listener, re-renders on every change.
-let _wdHistUnsubscribe = null;
-function loadWithdrawHistory() {
-  const container = $("withdrawHistory");
-  if (!container) return;
 
-  if (_wdHistUnsubscribe) return; // already live
-
-  _wdHistUnsubscribe = onValue(ref(db, `users/${UID}/transactions`), snap => {
-    const c = $("withdrawHistory");
-    if (!c) return;
-
-    // ── Clear first ──
-    c.innerHTML = "";
-
-    if (!snap.exists()) {
-      c.innerHTML = `<div class="hist-empty">ምንም ግብይት የለም</div>`;
-      return;
-    }
-
-    // እዚህም ጋር ቀይረው
-onValue(ref(db, `withdraws/${tgUser.id}`), (snap) => {
-  const rawData = snap.val();
-  const txs = rawData ? Object.keys(rawData).map(k => ({ ...rawData[k], key: k })) : [];
-  // የተቀረው ኮድ ይቀጥላል...
-
-
-    txs
-      .filter(t => t.type === "withdraw")
-      .sort((a, b) => (b.ts || 0) - (a.ts || 0))
-      .slice(0, 10)
-      .forEach(t => c.appendChild(buildTxCard(t)));
-  });
-}
-
-// ===== WITHDRAW =====
 async function submitWithdraw() {
   const phone = $("wdPhone").value.trim();
   const amt   = parseFloat($("wdAmount").value);
@@ -1232,60 +1232,83 @@ async function submitWithdraw() {
 
   await update(ref(db, `users/${UID}`), { balance: newBal });
   userBalance = newBal;
-  $("topBalance").textContent    = userBalance.toFixed(2);
-  $("menuBalance").textContent   = userBalance.toFixed(2);
+  $("topBalance").textContent           = userBalance.toFixed(2);
+  $("menuBalance").textContent          = userBalance.toFixed(2);
   $("withdrawBalanceDisplay").textContent = userBalance.toFixed(2) + " ETB";
 
-  const nowTs2 = Date.now();
+  // Push to user transactions — capture key for admin sync
   const txRef = push(ref(db, `users/${UID}/transactions`));
-  const wdTxKey = txRef.key;
-  await set(txRef, { type:"withdraw", status:"pending", amount:amt, fee, payout, phone, uid:UID, username: tgUser.username||myUsername, ts: nowTs2 });
+  const txKey = txRef.key;
+  await set(txRef, {
+    type:     "withdraw",
+    status:   "pending",
+    amount:   amt,
+    fee,
+    payout,
+    phone,
+    uid:      UID,
+    username: tgUser.username || myUsername,
+    ts:       serverTimestamp()
+  });
 
-  const adminRef = push(ref(db, `withdrawRequests`));
-  await set(adminRef, { uid:UID, txKey: wdTxKey, username: tgUser.username||myUsername, name:`${tgUser.first_name||""} ${tgUser.last_name||""}`.trim(), amount:amt, fee, payout, phone, status:"pending", ts: nowTs2 });
+  // Push to admin node — store txKey to enable precise sync
+  const adminRef = push(ref(db, "withdrawRequests"));
+  await set(adminRef, {
+    uid:      UID,
+    username: tgUser.username || myUsername,
+    name:     (tgUser.first_name || "") + " " + (tgUser.last_name || ""),
+    amount:   amt,
+    fee,
+    payout,
+    phone,
+    status:   "pending",
+    txKey:    txKey,
+    ts:       serverTimestamp()
+  });
 
-  $("wdPhone").value = ""; $("wdAmount").value = "";
-  toast(`✅ ጥያቄዎ ተልኳል! ${payout} ETB ወደ ${phone} ይደርሳል`);
+  $("wdPhone").value = "";
+  $("wdAmount").value = "";
+  toast("✅ ጥያቄዎ ተልኳል! " + payout + " ETB ወደ " + phone + " ይደርሳል");
 }
 window.submitWithdraw = submitWithdraw;
 
+function loadWithdrawHistory() {
+  const container = $("withdrawHistory");
+  if (!container) return;
+  onValue(ref(db, `users/${UID}/transactions`), snap => {
+    while (container.firstChild) container.removeChild(container.firstChild);
+    if (!snap.exists()) return;
+    const txs = [];
+    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+    txs.filter(t => t.type === "withdraw")
+       .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+       .slice(0, 10)
+       .forEach(t => container.appendChild(_buildHistItem(t)));
+  });
+}
 window.loadWithdrawHistory = loadWithdrawHistory;
 
-// ===== FULL TRANSACTION HISTORY =====
-// Uses a live onValue listener so the screen updates instantly when status changes.
-let _fullHistUnsubscribe = null;
-function showHistory() {
+
+
+// ===== FULL HISTORY =====
+async function showHistory() {
   showScreen("screen-history");
+  const container = $("fullHistory");
+  while (container.firstChild) container.removeChild(container.firstChild);
 
-  // Detach previous listener if any (e.g. user navigated away and back)
-  if (_fullHistUnsubscribe) {
-    _fullHistUnsubscribe();
-    _fullHistUnsubscribe = null;
-  }
-
-  _fullHistUnsubscribe = onValue(ref(db, `users/${UID}/transactions`), snap => {
-    const container = $("fullHistory");
-    if (!container) return;
-
-    // ── Clear first — prevents stale / duplicated rows ──
-    container.innerHTML = "";
-
+  onValue(ref(db, `users/${UID}/transactions`), snap => {
+    while (container.firstChild) container.removeChild(container.firstChild);
     if (!snap.exists()) {
-      container.innerHTML = `<div style="text-align:center;color:var(--text-dim);padding:40px;font-family:var(--font-am)">ምንም ግብይት የለም</div>`;
+      const empty = document.createElement("div");
+      empty.style.cssText = "text-align:center;color:rgba(255,255,255,0.3);padding:40px;font-family:var(--font-am)";
+      empty.textContent = "ምንም ግብይት የለም";
+      container.appendChild(empty);
       return;
     }
-
-    // Collect ALL transaction types, sort newest-first
-    // እዚህም ጋር ቀይረው
-get(ref(db, `deposits/${tgUser.id}`)).then(snap => {
-  const rawData = snap.val();
-  const txs = rawData ? Object.keys(rawData).map(k => ({ ...rawData[k], key: k })) : [];
-  // የተቀረው ኮድ ይቀጥላል...
-
-
-    txs
-      .sort((a, b) => (b.ts || 0) - (a.ts || 0))
-      .forEach(t => container.appendChild(buildTxCard(t)));
+    const txs = [];
+    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+    txs.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    txs.forEach(t => container.appendChild(_buildHistItem(t)));
   });
 }
 window.showHistory = showHistory;
@@ -1331,402 +1354,223 @@ async function init() {
 
 init();
 
-
 // ===== ADMIN PANEL =====
-// Completely rewritten — no innerHTML, no ID selectors, pure DOM API
-
-// Helper: treat missing/null/undefined status as "pending"
-function isPend(st) {
-  return !st || st === "pending";
-}
-
-// Track if listeners already attached (prevent duplicates)
-let _adminListenersStarted = false;
-
 function loadAdminPanel() {
-  if (_adminListenersStarted) return;
-  _adminListenersStarted = true;
-  _listenStats();
-  _listenDeposits();
-  _listenWithdraws();
-  _listenUsers();
+  loadAdminDeposits();
+  loadAdminWithdraws();
+  loadAdminUsers();
+  loadAdminStats();
 }
-
-// ── Tab switching ──────────────────────────────────────────────
 function adminTab(tab) {
-  const tabs   = ["deposit", "withdraw", "users"];
-  const panels = {
-    deposit:  document.getElementById("adminPanelDeposit"),
-    withdraw: document.getElementById("adminPanelWithdraw"),
-    users:    document.getElementById("adminPanelUsers")
-  };
-  const btns = {
-    deposit:  document.getElementById("tabDeposit"),
-    withdraw: document.getElementById("tabWithdraw"),
-    users:    document.getElementById("tabUsers")
-  };
-  tabs.forEach(t => {
-    if (panels[t]) panels[t].style.display = (t === tab) ? "block" : "none";
-    if (btns[t])   btns[t].classList.toggle("active", t === tab);
+  ["deposit","withdraw","users"].forEach(t => {
+    const p = $(`adminPanel${t.charAt(0).toUpperCase()+t.slice(1)}`);
+    const b = $(`tab${t.charAt(0).toUpperCase()+t.slice(1)}`);
+    if (p) p.style.display = t === tab ? "block" : "none";
+    if (b) b.classList.toggle("active", t === tab);
   });
 }
 window.adminTab = adminTab;
-
-// ── Stats counters ─────────────────────────────────────────────
-function _listenStats() {
-  onValue(ref(db, "depositRequests"), snap => {
-    let c = 0;
-    if (snap.exists()) snap.forEach(s => { if (isPend(s.val().status)) c++; });
-    const el = document.getElementById("adminPendingDep");
-    if (el) el.textContent = c;
+function loadAdminStats() {
+  onValue(ref(db,"depositRequests"), snap => {
+    let c=0; snap.forEach(s=>{ if(s.val().status==="pending") c++; });
+    $("adminPendingDep").textContent = c;
   });
-
-  onValue(ref(db, "withdrawRequests"), snap => {
-    let c = 0;
-    if (snap.exists()) snap.forEach(s => { if (isPend(s.val().status)) c++; });
-    const el = document.getElementById("adminPendingWd");
-    if (el) el.textContent = c;
+  onValue(ref(db,"withdrawRequests"), snap => {
+    let c=0; snap.forEach(s=>{ if(s.val().status==="pending") c++; });
+    $("adminPendingWd").textContent = c;
   });
-
-  onValue(ref(db, "users"), snap => {
-    const el = document.getElementById("adminTotalUsers");
-    if (el) el.textContent = snap.exists() ? Object.keys(snap.val()).length : 0;
+  onValue(ref(db,"users"), snap => {
+    $("adminTotalUsers").textContent = snap.exists() ? Object.keys(snap.val()).length : 0;
   });
 }
-
-// ── Build a card using pure DOM (no innerHTML, no ID selectors) ─
-function _buildCard(cardClass, rows) {
-  // rows = array of {type, content}
-  // type: "header" | "meta" | "actions"
-  const card = document.createElement("div");
-  card.className = "admin-card " + cardClass;
-
-  rows.forEach(row => {
-    const rowEl = document.createElement("div");
-    rowEl.className = "ac-row" + (row.type === "meta" ? " ac-meta" : row.type === "actions" ? " ac-actions" : "");
-    row.content(rowEl);
-    card.appendChild(rowEl);
-  });
-
-  return card;
-}
-
-function _el(tag, cls, text) {
-  const e = document.createElement(tag);
-  if (cls)  e.className   = cls;
-  if (text !== undefined) e.textContent = text;
-  return e;
-}
-
-function _statusBadge(status) {
-  const badge = _el("span", "ac-status");
-  if (isPend(status)) {
-    badge.className += " st-pending";
-    badge.textContent = "⏳ Pending";
-  } else if (status === "approved") {
-    badge.className += " st-approved";
-    badge.textContent = "✅ Approved";
-  } else {
-    badge.className += " st-cancelled";
-    badge.textContent = "❌ Cancelled";
-  }
-  return badge;
-}
-
-function _btn(label, cls, onClick) {
-  const b = _el("button", "ac-btn " + cls, label);
-  b.addEventListener("click", onClick);
-  return b;
-}
-
-// ── Deposits ───────────────────────────────────────────────────
-function _makeDepCard(item) {
-  const pend  = isPend(item.status);
-  const cls   = pend ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled";
-  const card  = document.createElement("div");
-  card.className = "admin-card " + cls;
-
-  // Row 1: user info + amount
-  const row1 = document.createElement("div");
-  row1.className = "ac-row";
-  const userDiv  = _el("div", "ac-user");
-  userDiv.appendChild(_el("div", "ac-name", "@" + (item.username || "unknown")));
-  userDiv.appendChild(_el("div", "ac-uid",  "ID: " + item.uid));
-  row1.appendChild(userDiv);
-  row1.appendChild(_el("div", "ac-amount pos", "+" + item.amount + " ETB"));
-  card.appendChild(row1);
-
-  // Row 2: SMS + status badge
-  const row2 = document.createElement("div");
-  row2.className = "ac-row ac-meta";
-  const smsSpan = _el("span", null, "📱 SMS: ");
-  const smsBold = _el("b", null, item.sms || "—");
-  smsSpan.appendChild(smsBold);
-  row2.appendChild(smsSpan);
-  row2.appendChild(_statusBadge(item.status));
-  card.appendChild(row2);
-
-  // Row 3: Action buttons (only if pending)
-  if (pend) {
-    const row3 = document.createElement("div");
-    row3.className = "ac-actions";
-    row3.appendChild(_btn("✅ Approve", "ac-approve", () => _approveDeposit(item.key, item.uid, item.amount)));
-    row3.appendChild(_btn("❌ Cancel",  "ac-cancel",  () => _cancelDeposit(item.key)));
-    card.appendChild(row3);
-  }
-
-  return card;
-}
-
-function _listenDeposits() {
-  onValue(ref(db, "depositRequests"), snap => {
-    const list = document.getElementById("adminDepositList");
-    if (!list) return;
-
-    // Clear
-    while (list.firstChild) list.removeChild(list.firstChild);
-
+function loadAdminDeposits() {
+  onValue(ref(db,"depositRequests"), snap => {
+    const list = $("adminDepositList");
+    list.innerHTML = "";
     if (!snap.exists()) {
-      list.appendChild(_el("div", "admin-empty", "ምንም deposit request የለም"));
+      list.innerHTML = '<div class="admin-empty">ምንም deposit request የለም</div>';
       return;
     }
-
     const items = [];
-    snap.forEach(s => {
-      const v = s.val();
-      items.push({
-        key:      s.key,
-        uid:      v.uid      || "",
-        username: v.username || "",
-        amount:   v.amount   || 0,
-        sms:      v.sms      || "",
-        status:   v.status,      // may be undefined — isPend() handles it
-        ts:       v.ts       || 0
-      });
-    });
-
-    // Sort: pending first, then newest
+    snap.forEach(s => items.push({ key: s.key, ...s.val() }));
     items.sort((a, b) => {
-      const pa = isPend(a.status) ? 0 : 1;
-      const pb = isPend(b.status) ? 0 : 1;
-      if (pa !== pb) return pa - pb;
-      return b.ts - a.ts;
+      if (a.status === "pending" && b.status !== "pending") return -1;
+      if (b.status === "pending" && a.status !== "pending") return 1;
+      return (b.ts || 0) - (a.ts || 0);
     });
-
-    items.forEach(item => list.appendChild(_makeDepCard(item)));
+    items.forEach(item => {
+      const card = document.createElement("div");
+      const sc = item.status==="pending"?"acard-pending":item.status==="approved"?"acard-approved":"acard-cancelled";
+      const sl = item.status==="pending"?"⏳ Pending":item.status==="approved"?"✅ Approved":"❌ Cancelled";
+      const ss = item.status==="pending"?"st-pending":item.status==="approved"?"st-approved":"st-cancelled";
+      card.className = "admin-card " + sc;
+      const actionsHtml = item.status === "pending"
+        ? `<div class="ac-actions"><button class="ac-btn ac-approve" onclick="adminApproveDeposit('${item.key}','${item.uid}',${item.amount})">✅ Approve</button><button class="ac-btn ac-cancel" onclick="adminCancelDeposit('${item.key}')">❌ Cancel</button></div>`
+        : "";
+      card.innerHTML = `<div class="ac-row"><div class="ac-user"><div class="ac-name">@${item.username||"unknown"}</div><div class="ac-uid">ID: ${item.uid}</div></div><div class="ac-amount pos">+${item.amount} ETB</div></div><div class="ac-row ac-meta"><span>📱 SMS: <b>${item.sms||"—"}</b></span><span class="ac-status ${ss}">${sl}</span></div>` + actionsHtml;
+      list.appendChild(card);
+    });
   });
 }
-
-async function _approveDeposit(key, uid, amount) {
+async function adminApproveDeposit(key, uid, amount) {
   if (!confirm(amount + " ETB approve ታደርጋለህ?")) return;
   try {
+    // Get txKey from the admin request (for precise user tx update)
+    const reqSnap = await get(ref(db, "depositRequests/" + key));
+    const txKey   = reqSnap.exists() ? reqSnap.val().txKey : null;
+
+    // 1. Mark admin request approved
     await update(ref(db, "depositRequests/" + key), { status: "approved" });
 
-    // Update user transaction
-    const txSnap = await get(ref(db, "users/" + uid + "/transactions"));
-    if (txSnap.exists()) {
-      const upd = {};
-      txSnap.forEach(s => {
-        const t = s.val();
-        if (t.type === "deposit" && isPend(t.status) && t.amount === amount)
-          upd["users/" + uid + "/transactions/" + s.key + "/status"] = "approved";
-      });
-      if (Object.keys(upd).length) await update(ref(db), upd);
+    // 2. Update user transaction — use txKey if available, else match by amount
+    if (txKey) {
+      await update(ref(db, "users/" + uid + "/transactions/" + txKey), { status: "approved" });
+    } else {
+      const txSnap = await get(ref(db, "users/" + uid + "/transactions"));
+      if (txSnap.exists()) {
+        const upd = {};
+        txSnap.forEach(s => {
+          const t = s.val();
+          if (t.type === "deposit" && (!t.status || t.status === "pending") && t.amount === amount)
+            upd["users/" + uid + "/transactions/" + s.key + "/status"] = "approved";
+        });
+        if (Object.keys(upd).length) await update(ref(db), upd);
+      }
     }
 
-    // Credit balance
+    // 3. Credit balance
     const balSnap = await get(ref(db, "users/" + uid + "/balance"));
     const cur = balSnap.exists() ? (balSnap.val() || 0) : 0;
     await update(ref(db, "users/" + uid), { balance: +(cur + amount).toFixed(2) });
 
     toast("✅ " + amount + " ETB approved! ሂሳቡ ወደ ተጠቃሚ ተጨምሯል");
-  } catch (e) {
+  } catch(e) {
     console.error(e);
     toast("❌ Error: " + e.message);
   }
 }
-
-async function _cancelDeposit(key) {
+window.adminApproveDeposit = adminApproveDeposit;
+async function adminCancelDeposit(key) {
   if (!confirm("ይህን deposit ሰርዝ?")) return;
   try {
+    const reqSnap = await get(ref(db, "depositRequests/" + key));
+    const txKey   = reqSnap.exists() ? reqSnap.val().txKey  : null;
+    const uid     = reqSnap.exists() ? reqSnap.val().uid    : null;
+
     await update(ref(db, "depositRequests/" + key), { status: "cancelled" });
+
+    if (txKey && uid) {
+      await update(ref(db, "users/" + uid + "/transactions/" + txKey), { status: "cancelled" });
+    }
     toast("❌ Deposit cancelled.");
-  } catch (e) {
+  } catch(e) {
     toast("❌ Error: " + e.message);
   }
 }
-
-// ── Withdrawals ────────────────────────────────────────────────
-function _makeWdCard(item) {
-  const pend = isPend(item.status);
-  const cls  = pend ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled";
-  const card = document.createElement("div");
-  card.className = "admin-card " + cls;
-
-  // Row 1
-  const row1 = document.createElement("div");
-  row1.className = "ac-row";
-  const userDiv = _el("div", "ac-user");
-  userDiv.appendChild(_el("div", "ac-name", "@" + (item.username || "unknown")));
-  userDiv.appendChild(_el("div", "ac-uid",  "ID: " + item.uid));
-  row1.appendChild(userDiv);
-  row1.appendChild(_el("div", "ac-amount neg", "-" + item.amount + " ETB"));
-  card.appendChild(row1);
-
-  // Row 2
-  const row2 = document.createElement("div");
-  row2.className = "ac-row ac-meta";
-  row2.appendChild(_el("span", null, "📱 " + (item.phone || "—")));
-  row2.appendChild(_el("span", null, "💸 " + (item.payout || item.amount) + " ETB"));
-  row2.appendChild(_statusBadge(item.status));
-  card.appendChild(row2);
-
-  // Row 3
-  if (pend) {
-    const row3 = document.createElement("div");
-    row3.className = "ac-actions";
-    row3.appendChild(_btn("✅ Mark Sent", "ac-approve", () => _approveWithdraw(item.key, item.uid, item.amount)));
-    row3.appendChild(_btn("❌ Refund",    "ac-cancel",  () => _cancelWithdraw(item.key, item.uid, item.amount)));
-    card.appendChild(row3);
-  }
-
-  return card;
-}
-
-function _listenWithdraws() {
-  onValue(ref(db, "withdrawRequests"), snap => {
-    const list = document.getElementById("adminWithdrawList");
-    if (!list) return;
-
-    while (list.firstChild) list.removeChild(list.firstChild);
-
-    if (!snap.exists()) {
-      list.appendChild(_el("div", "admin-empty", "ምንም withdrawal request የለም"));
-      return;
-    }
-
-    const items = [];
-    snap.forEach(s => {
-      const v = s.val();
-      items.push({
-        key:      s.key,
-        uid:      v.uid      || "",
-        username: v.username || "",
-        amount:   v.amount   || 0,
-        phone:    v.phone    || "",
-        payout:   v.payout   || v.amount || 0,
-        status:   v.status,
-        ts:       v.ts       || 0
-      });
-    });
-
-    items.sort((a, b) => {
-      const pa = isPend(a.status) ? 0 : 1;
-      const pb = isPend(b.status) ? 0 : 1;
-      if (pa !== pb) return pa - pb;
-      return b.ts - a.ts;
-    });
-
-    items.forEach(item => list.appendChild(_makeWdCard(item)));
-  });
-}
-
-async function _approveWithdraw(key, uid, amount) {
-  if (!confirm(amount + " ETB ተልኳል ብለህ ታረጋግጣለህ?")) return;
-  try {
-    await update(ref(db, "withdrawRequests/" + key), { status: "approved" });
-    const txSnap = await get(ref(db, "users/" + uid + "/transactions"));
-    if (txSnap.exists()) {
-      const upd = {};
-      txSnap.forEach(s => {
-        const t = s.val();
-        if (t.type === "withdraw" && isPend(t.status) && t.amount === amount)
-          upd["users/" + uid + "/transactions/" + s.key + "/status"] = "approved";
-      });
-      if (Object.keys(upd).length) await update(ref(db), upd);
-    }
-    toast("✅ Withdrawal marked as sent!");
-  } catch (e) {
-    toast("❌ Error: " + e.message);
-  }
-}
-
-async function _cancelWithdraw(key, uid, amount) {
-  if (!confirm("Cancel & " + amount + " ETB refund ታደርጋለህ?")) return;
-  try {
-    await update(ref(db, "withdrawRequests/" + key), { status: "cancelled" });
-    const txSnap = await get(ref(db, "users/" + uid + "/transactions"));
-    if (txSnap.exists()) {
-      const upd = {};
-      txSnap.forEach(s => {
-        const t = s.val();
-        if (t.type === "withdraw" && isPend(t.status) && t.amount === amount)
-          upd["users/" + uid + "/transactions/" + s.key + "/status"] = "cancelled";
-      });
-      if (Object.keys(upd).length) await update(ref(db), upd);
-    }
-    // Refund
-    const balSnap = await get(ref(db, "users/" + uid + "/balance"));
-    const cur = balSnap.exists() ? (balSnap.val() || 0) : 0;
-    await update(ref(db, "users/" + uid), { balance: +(cur + amount).toFixed(2) });
-    toast("↩ Refunded " + amount + " ETB");
-  } catch (e) {
-    toast("❌ Error: " + e.message);
-  }
-}
-
-// ── Users ──────────────────────────────────────────────────────
-function _listenUsers() {
-  onValue(ref(db, "users"), snap => {
-    const list = document.getElementById("adminUserList");
-    if (!list) return;
-
-    while (list.firstChild) list.removeChild(list.firstChild);
-
-    if (!snap.exists()) {
-      list.appendChild(_el("div", "admin-empty", "ምንም user የለም"));
-      return;
-    }
-
-    const users = [];
-    snap.forEach(s => {
-      const v = s.val();
-      users.push({ uid: s.key, name: v.name || "", username: v.username || "", balance: v.balance || 0 });
-    });
-    users.sort((a, b) => b.balance - a.balance);
-
-    users.forEach(u => {
+window.adminCancelDeposit = adminCancelDeposit;
+function loadAdminWithdraws() {
+  onValue(ref(db,"withdrawRequests"), snap => {
+    const list = $("adminWithdrawList"); list.innerHTML = "";
+    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">ምንም withdrawal የለም</div>`; return; }
+    const items = []; snap.forEach(s => items.push({key:s.key,...s.val()}));
+    items.sort((a,b)=>(b.ts||0)-(a.ts||0));
+    items.forEach(item => {
       const card = document.createElement("div");
-      card.className = "admin-card acard-user";
-
-      const row1 = document.createElement("div");
-      row1.className = "ac-row";
-      const userDiv = _el("div", "ac-user");
-      userDiv.appendChild(_el("div", "ac-name", u.name || u.username || "Unknown"));
-      userDiv.appendChild(_el("div", "ac-uid",  "@" + (u.username || "—") + " · ID: " + u.uid));
-      row1.appendChild(userDiv);
-      row1.appendChild(_el("div", "ac-amount pos", u.balance.toFixed(2) + " ETB"));
-      card.appendChild(row1);
-
-      const row2 = document.createElement("div");
-      row2.className = "ac-actions";
-      row2.appendChild(_btn("💰 Balance አስተካክል", "ac-approve", () => _adjustBalance(u.uid, u.name || u.username || u.uid, u.balance)));
-      card.appendChild(row2);
-
+      card.className = `admin-card ${item.status==="pending"?"acard-pending":item.status==="approved"?"acard-approved":"acard-cancelled"}`;
+      card.innerHTML = `
+        <div class="ac-row"><div class="ac-user"><div class="ac-name">@${item.username||"unknown"}</div><div class="ac-uid">ID: ${item.uid}</div></div><div class="ac-amount neg">-${item.amount} ETB</div></div>
+        <div class="ac-row ac-meta"><span>📱 ${item.phone||"—"}</span><span>💸 ${item.payout||item.amount} ETB</span><span class="ac-status ${item.status==="pending"?"st-pending":item.status==="approved"?"st-approved":"st-cancelled"}">${item.status==="pending"?"⏳ Pending":item.status==="approved"?"✅ Sent":"❌ Cancelled"}</span></div>
+        ${item.status==="pending"?`<div class="ac-actions"><button class="ac-btn ac-approve" onclick="adminApproveWithdraw('${item.key}','${item.uid}',${item.amount})">✅ Sent</button><button class="ac-btn ac-cancel" onclick="adminCancelWithdraw('${item.key}','${item.uid}',${item.amount})">❌ Refund</button></div>`:""}
+      `;
       list.appendChild(card);
     });
   });
 }
-
-async function _adjustBalance(uid, name, cur) {
-  const val = prompt(name + "\nአዲስ balance (አሁን: " + cur.toFixed(2) + " ETB):");
-  if (val === null) return;
-  const nb = parseFloat(val);
-  if (isNaN(nb) || nb < 0) { toast("⚠ ትክክለኛ ቁጥር ያስገቡ"); return; }
+async function adminApproveWithdraw(key, uid, amount) {
+  if (!confirm(amount + " ETB ተልኳል ብለህ ታረጋግጣለህ?")) return;
   try {
-    await update(ref(db, "users/" + uid), { balance: nb });
-    toast("✅ Balance → " + nb + " ETB");
-  } catch (e) {
+    const reqSnap = await get(ref(db, "withdrawRequests/" + key));
+    const txKey   = reqSnap.exists() ? reqSnap.val().txKey : null;
+
+    await update(ref(db, "withdrawRequests/" + key), { status: "approved" });
+
+    if (txKey) {
+      await update(ref(db, "users/" + uid + "/transactions/" + txKey), { status: "approved" });
+    } else {
+      const txSnap = await get(ref(db, "users/" + uid + "/transactions"));
+      if (txSnap.exists()) {
+        const upd = {};
+        txSnap.forEach(s => {
+          const t = s.val();
+          if (t.type === "withdraw" && (!t.status || t.status === "pending") && t.amount === amount)
+            upd["users/" + uid + "/transactions/" + s.key + "/status"] = "approved";
+        });
+        if (Object.keys(upd).length) await update(ref(db), upd);
+      }
+    }
+    toast("✅ Withdrawal marked as sent!");
+  } catch(e) {
     toast("❌ Error: " + e.message);
   }
 }
+window.adminApproveWithdraw = adminApproveWithdraw;
+async function adminCancelWithdraw(key, uid, amount) {
+  if (!confirm("Cancel & " + amount + " ETB refund ታደርጋለህ?")) return;
+  try {
+    const reqSnap = await get(ref(db, "withdrawRequests/" + key));
+    const txKey   = reqSnap.exists() ? reqSnap.val().txKey : null;
+
+    await update(ref(db, "withdrawRequests/" + key), { status: "cancelled" });
+
+    if (txKey) {
+      await update(ref(db, "users/" + uid + "/transactions/" + txKey), { status: "cancelled" });
+    } else {
+      const txSnap = await get(ref(db, "users/" + uid + "/transactions"));
+      if (txSnap.exists()) {
+        const upd = {};
+        txSnap.forEach(s => {
+          const t = s.val();
+          if (t.type === "withdraw" && (!t.status || t.status === "pending") && t.amount === amount)
+            upd["users/" + uid + "/transactions/" + s.key + "/status"] = "cancelled";
+        });
+        if (Object.keys(upd).length) await update(ref(db), upd);
+      }
+    }
+
+    // Refund balance
+    const balSnap = await get(ref(db, "users/" + uid + "/balance"));
+    const cur = balSnap.exists() ? (balSnap.val() || 0) : 0;
+    await update(ref(db, "users/" + uid), { balance: +(cur + amount).toFixed(2) });
+    toast("↩ Refunded " + amount + " ETB");
+  } catch(e) {
+    toast("❌ Error: " + e.message);
+  }
+}
+window.adminCancelWithdraw = adminCancelWithdraw;
+function loadAdminUsers() {
+  onValue(ref(db,"users"), snap => {
+    const list = $("adminUserList"); list.innerHTML = "";
+    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">ምንም user የለም</div>`; return; }
+    const users = []; snap.forEach(s => users.push({uid:s.key,...s.val()}));
+    users.sort((a,b)=>(b.balance||0)-(a.balance||0));
+    users.forEach(u => {
+      const card = document.createElement("div");
+      card.className = "admin-card acard-user";
+      card.innerHTML = `
+        <div class="ac-row"><div class="ac-user"><div class="ac-name">${u.name||u.username||"Unknown"}</div><div class="ac-uid">@${u.username||"—"} · ID: ${u.uid}</div></div><div class="ac-amount pos">${(u.balance||0).toFixed(2)} ETB</div></div>
+        <div class="ac-row ac-meta"><button class="ac-btn ac-approve" style="flex:1" onclick="adminAdjustBalance('${u.uid}','${u.username||u.name||u.uid}',${u.balance||0})">💰 Balance አስተካክል</button></div>
+      `;
+      list.appendChild(card);
+    });
+  });
+}
+async function adminAdjustBalance(uid,name,cur) {
+  const val = prompt(`${name} አዲስ balance (አሁን: ${cur} ETB)`);
+  if (val===null) return;
+  const nb = parseFloat(val);
+  if (isNaN(nb)||nb<0) { toast("⚠ ትክክለኛ ቁጥር"); return; }
+  await update(ref(db,`users/${uid}`),{balance:nb});
+  toast(`✅ Balance → ${nb} ETB`);
+}
+window.adminAdjustBalance = adminAdjustBalance;
+
