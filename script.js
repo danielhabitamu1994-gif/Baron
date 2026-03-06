@@ -1098,34 +1098,33 @@ async function submitDeposit() {
 }
 window.submitDeposit = submitDeposit;
 
-let _depHistUnsub = null;
+// Single persistent listener — started once at app init, never re-created
+let _depHistStarted = false;
 function loadDepositHistory() {
-  // Detach previous listener if exists
-  if (_depHistUnsub) { _depHistUnsub(); _depHistUnsub = null; }
-  _depHistUnsub = onValue(ref(db, `users/${UID}/transactions`), snap => {
+  if (_depHistStarted) return; // already listening
+  _depHistStarted = true;
+  onValue(ref(db, `users/${UID}/transactions`), snap => {
     const container = $("depositHistory");
     if (!container) return;
     container.innerHTML = "";
     if (!snap.exists()) return;
     const txs = [];
-    snap.forEach(s => {
-      const v = s.val();
-      txs.push({ ...v, key: s.key, _order: v.ts || s.key });
-    });
+    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
     txs.filter(t => t.type === "deposit")
-       .sort((a, b) => (a._order > b._order ? -1 : 1))
+       .sort((a, b) => (b.ts || 0) - (a.ts || 0))
        .slice(0, 8)
        .forEach(t => {
          const el = document.createElement("div");
-         el.className = "hist-item hist-dep" + (t.status === "pending" ? " hist-pending" : "");
-         const statusHtml = t.status === "pending"
-           ? '<div class="hist-status">⏳ Pending...</div>'
-           : '<div class="hist-status" style="color:var(--green)">✅ Approved</div>';
-         el.innerHTML = '<div class="hist-label">📥 Deposit</div>'
-           + '<div class="hist-right">'
-           + '<div class="hist-amount pos">+' + t.amount + ' ETB</div>'
-           + statusHtml
-           + '</div>';
+         el.className = `hist-item hist-dep ${t.status === "pending" ? "hist-pending" : ""}`;
+         el.innerHTML = `
+           <div class="hist-label">📥 Deposit</div>
+           <div class="hist-right">
+             <div class="hist-amount pos">+${t.amount} ETB</div>
+             ${t.status === "pending"
+               ? `<div class="hist-status">⏳ Pending...</div>`
+               : `<div class="hist-status" style="color:var(--green)">✅ Approved</div>`}
+           </div>
+         `;
          container.appendChild(el);
        });
   });
@@ -1185,37 +1184,32 @@ function loadWithdrawHistory() {
 window.loadWithdrawHistory = loadWithdrawHistory;
 
 // ===== FULL HISTORY =====
-function showHistory() {
+async function showHistory() {
   showScreen("screen-history");
+  const snap = await get(ref(db, `users/${UID}/transactions`));
   const container = $("fullHistory");
-  container.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:30px;font-family:var(--font-am)">በመጫን ላይ...</div>';
-  onValue(ref(db, `users/${UID}/transactions`), snap => {
-    container.innerHTML = "";
-    if (!snap.exists()) {
-      container.innerHTML = '<div style="text-align:center;color:var(--text-dim);padding:40px;font-family:var(--font-am)">ምንም ግብይት የለም</div>';
-      return;
-    }
-    const txs = [];
-    snap.forEach(s => {
-      const v = s.val();
-      txs.push({ ...v, key: s.key, _order: v.ts || s.key });
-    });
-    txs.sort((a, b) => (a._order > b._order ? -1 : 1)).forEach(t => {
-      const el  = document.createElement("div");
-      const cls  = t.type === "win" ? "hist-win" : t.type === "deposit" ? "hist-dep" : "hist-bet";
-      const icon = t.type === "win" ? "🏆" : t.type === "deposit" ? "📥" : t.type === "withdraw" ? "📤" : "🎯";
-      const pos  = t.type === "win" || t.type === "deposit";
-      const lbl  = t.type === "win" ? "ድል" : t.type === "deposit" ? "Deposit" : t.type === "withdraw" ? "Withdraw" : "Stake";
-      el.className = "hist-item " + cls;
-      const pendingHtml = t.status === "pending" ? '<div class="hist-status">⏳ Pending</div>' : "";
-      el.innerHTML = '<div class="hist-label">' + icon + ' ' + lbl + ' — ' + (t.stake||t.amount) + ' ETB</div>'
-        + '<div class="hist-right">'
-        + '<div class="hist-amount ' + (pos?"pos":"neg") + '">' + (pos?"+":"-") + t.amount + ' ETB</div>'
-        + pendingHtml
-        + '</div>';
-      container.appendChild(el);
-    });
-  }, { onlyOnce: true });
+  container.innerHTML = "";
+  if (!snap.exists()) {
+    container.innerHTML = `<div style="text-align:center;color:var(--text-dim);padding:40px;font-family:var(--font-am)">ምንም ግብይት የለም</div>`;
+    return;
+  }
+  const txs = [];
+  snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+  txs.reverse().forEach(t => {
+    const el = document.createElement("div");
+    const cls = t.type === "win" ? "hist-win" : t.type === "deposit" ? "hist-dep" : "hist-bet";
+    const icon = t.type === "win" ? "🏆" : t.type === "deposit" ? "📥" : "🎯";
+    const pos = t.type === "win" || t.type === "deposit";
+    el.className = `hist-item ${cls}`;
+    el.innerHTML = `
+      <div class="hist-label">${icon} ${t.type === "win" ? "ድል" : t.type === "deposit" ? "Deposit" : "Stake"} — ${t.stake||t.amount} ETB</div>
+      <div class="hist-right">
+        <div class="hist-amount ${pos?"pos":"neg"}">${pos?"+":"-"}${t.amount} ETB</div>
+        ${t.status === "pending" ? `<div class="hist-status">⏳ Pending</div>` : ""}
+      </div>
+    `;
+    container.appendChild(el);
+  });
 }
 window.showHistory = showHistory;
 
@@ -1290,7 +1284,7 @@ function loadAdminStats() {
   });
 }
 function loadAdminDeposits() {
-  onValue(ref(db, "depositRequests"), snap => {
+  onValue(ref(db,"depositRequests"), snap => {
     const list = $("adminDepositList");
     if (!list) return;
     list.innerHTML = "";
@@ -1300,52 +1294,43 @@ function loadAdminDeposits() {
     }
     const items = [];
     snap.forEach(s => items.push({ key: s.key, ...s.val() }));
-    // pending first, then newest first
     items.sort((a, b) => {
       if (a.status === "pending" && b.status !== "pending") return -1;
-      if (b.status === "pending" && a.status !== "pending") return  1;
+      if (b.status === "pending" && a.status !== "pending") return 1;
       return (b.ts || 0) - (a.ts || 0);
     });
     items.forEach(item => {
+      const isPending = !item.status || item.status === "pending";
       const card = document.createElement("div");
-      card.className = "admin-card "
-        + (item.status === "pending" ? "acard-pending"
-         : item.status === "approved" ? "acard-approved"
-         : "acard-cancelled");
+      card.className = "admin-card " + (isPending ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled");
 
-      // Row 1: name + amount
-      const row1 = document.createElement("div");
-      row1.className = "ac-row";
-      row1.innerHTML = '<div class="ac-user"><div class="ac-name">@' + (item.username||"unknown") + '</div><div class="ac-uid">ID: ' + item.uid + '</div></div>'
-        + '<div class="ac-amount pos">+' + item.amount + ' ETB</div>';
-      card.appendChild(row1);
-
-      // Row 2: SMS + status
-      const stCls = item.status === "pending" ? "st-pending" : item.status === "approved" ? "st-approved" : "st-cancelled";
-      const stLbl = item.status === "pending" ? "⏳ Pending" : item.status === "approved" ? "✅ Approved" : "❌ Cancelled";
-      const row2 = document.createElement("div");
-      row2.className = "ac-row ac-meta";
-      row2.innerHTML = '<span>📱 SMS: <b>' + (item.sms||"—") + '</b></span>'
-        + '<span class="ac-status ' + stCls + '">' + stLbl + '</span>';
-      card.appendChild(row2);
-
-      // Actions (pending only)
-      if (item.status === "pending") {
-        const acts = document.createElement("div");
-        acts.className = "ac-actions";
-        const btnApprove = document.createElement("button");
-        btnApprove.className = "ac-btn ac-approve";
-        btnApprove.textContent = "✅ Approve";
-        btnApprove.onclick = () => adminApproveDeposit(item.key, item.uid, item.amount);
-        const btnCancel = document.createElement("button");
-        btnCancel.className = "ac-btn ac-cancel";
-        btnCancel.textContent = "❌ Cancel";
-        btnCancel.onclick = () => adminCancelDeposit(item.key);
-        acts.appendChild(btnApprove);
-        acts.appendChild(btnCancel);
-        card.appendChild(acts);
+      card.innerHTML = `
+        <div class="ac-row">
+          <div class="ac-user">
+            <div class="ac-name">@${item.username || "unknown"}</div>
+            <div class="ac-uid">ID: ${item.uid}</div>
+          </div>
+          <div class="ac-amount pos">+${item.amount} ETB</div>
+        </div>
+        <div class="ac-row ac-meta">
+          <span>📱 SMS: <b>${item.sms || "—"}</b></span>
+          <span class="ac-status ${isPending ? "st-pending" : item.status === "approved" ? "st-approved" : "st-cancelled"}">
+            ${isPending ? "⏳ Pending" : item.status === "approved" ? "✅ Approved" : "❌ Cancelled"}
+          </span>
+        </div>
+        ${isPending ? `
+        <div class="ac-actions">
+          <button class="ac-btn ac-approve" data-key="${item.key}" data-uid="${item.uid}" data-amount="${item.amount}" data-action="dep-approve">✅ Approve</button>
+          <button class="ac-btn ac-cancel"  data-key="${item.key}" data-uid="${item.uid}" data-amount="${item.amount}" data-action="dep-cancel">❌ Cancel</button>
+        </div>` : ""}
+      `;
+      // Attach event listeners via data attributes (safe in ES modules)
+      if (isPending) {
+        card.querySelector('[data-action="dep-approve"]').addEventListener('click', () =>
+          adminApproveDeposit(item.key, item.uid, item.amount));
+        card.querySelector('[data-action="dep-cancel"]').addEventListener('click', () =>
+          adminCancelDeposit(item.key));
       }
-
       list.appendChild(card);
     });
   });
@@ -1368,59 +1353,48 @@ async function adminCancelDeposit(key) {
 }
 window.adminCancelDeposit = adminCancelDeposit;
 function loadAdminWithdraws() {
-  onValue(ref(db, "withdrawRequests"), snap => {
+  onValue(ref(db,"withdrawRequests"), snap => {
     const list = $("adminWithdrawList");
     if (!list) return;
     list.innerHTML = "";
-    if (!snap.exists()) {
-      list.innerHTML = '<div class="admin-empty">ምንም withdrawal የለም</div>';
-      return;
-    }
-    const items = [];
-    snap.forEach(s => items.push({ key: s.key, ...s.val() }));
-    items.sort((a, b) => {
+    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">ምንም withdrawal የለም</div>`; return; }
+    const items = []; snap.forEach(s => items.push({key:s.key,...s.val()}));
+    items.sort((a,b) => {
       if (a.status === "pending" && b.status !== "pending") return -1;
-      if (b.status === "pending" && a.status !== "pending") return  1;
-      return (b.ts || 0) - (a.ts || 0);
+      if (b.status === "pending" && a.status !== "pending") return 1;
+      return (b.ts||0)-(a.ts||0);
     });
     items.forEach(item => {
+      const isPending = !item.status || item.status === "pending";
       const card = document.createElement("div");
-      card.className = "admin-card "
-        + (item.status === "pending" ? "acard-pending"
-         : item.status === "approved" ? "acard-approved"
-         : "acard-cancelled");
-
-      const row1 = document.createElement("div");
-      row1.className = "ac-row";
-      row1.innerHTML = '<div class="ac-user"><div class="ac-name">@' + (item.username||"unknown") + '</div><div class="ac-uid">ID: ' + item.uid + '</div></div>'
-        + '<div class="ac-amount neg">-' + item.amount + ' ETB</div>';
-      card.appendChild(row1);
-
-      const stCls = item.status === "pending" ? "st-pending" : item.status === "approved" ? "st-approved" : "st-cancelled";
-      const stLbl = item.status === "pending" ? "⏳ Pending" : item.status === "approved" ? "✅ Sent" : "❌ Cancelled";
-      const row2 = document.createElement("div");
-      row2.className = "ac-row ac-meta";
-      row2.innerHTML = '<span>📱 ' + (item.phone||"—") + '</span>'
-        + '<span>💸 ' + (item.payout||item.amount) + ' ETB</span>'
-        + '<span class="ac-status ' + stCls + '">' + stLbl + '</span>';
-      card.appendChild(row2);
-
-      if (item.status === "pending") {
-        const acts = document.createElement("div");
-        acts.className = "ac-actions";
-        const btnSent = document.createElement("button");
-        btnSent.className = "ac-btn ac-approve";
-        btnSent.textContent = "✅ Sent";
-        btnSent.onclick = () => adminApproveWithdraw(item.key, item.uid, item.amount);
-        const btnRefund = document.createElement("button");
-        btnRefund.className = "ac-btn ac-cancel";
-        btnRefund.textContent = "❌ Refund";
-        btnRefund.onclick = () => adminCancelWithdraw(item.key, item.uid, item.amount);
-        acts.appendChild(btnSent);
-        acts.appendChild(btnRefund);
-        card.appendChild(acts);
+      card.className = `admin-card ${isPending ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled"}`;
+      card.innerHTML = `
+        <div class="ac-row">
+          <div class="ac-user">
+            <div class="ac-name">@${item.username || "unknown"}</div>
+            <div class="ac-uid">ID: ${item.uid}</div>
+          </div>
+          <div class="ac-amount neg">-${item.amount} ETB</div>
+        </div>
+        <div class="ac-row ac-meta">
+          <span>📱 ${item.phone || "—"}</span>
+          <span>💸 ${item.payout || item.amount} ETB (after 5% fee)</span>
+          <span class="ac-status ${isPending ? "st-pending" : item.status === "approved" ? "st-approved" : "st-cancelled"}">
+            ${isPending ? "⏳ Pending" : item.status === "approved" ? "✅ Sent" : "❌ Cancelled"}
+          </span>
+        </div>
+        ${isPending ? `
+        <div class="ac-actions">
+          <button class="ac-btn ac-approve" data-key="${item.key}" data-uid="${item.uid}" data-amount="${item.amount}" data-action="wd-approve">✅ Mark Sent</button>
+          <button class="ac-btn ac-cancel"  data-key="${item.key}" data-uid="${item.uid}" data-amount="${item.amount}" data-action="wd-cancel">❌ Refund</button>
+        </div>` : ""}
+      `;
+      if (isPending) {
+        card.querySelector('[data-action="wd-approve"]').addEventListener('click', () =>
+          adminApproveWithdraw(item.key, item.uid, item.amount));
+        card.querySelector('[data-action="wd-cancel"]').addEventListener('click', () =>
+          adminCancelWithdraw(item.key, item.uid, item.amount));
       }
-
       list.appendChild(card);
     });
   });
