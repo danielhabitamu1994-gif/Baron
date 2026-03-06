@@ -67,18 +67,27 @@ let gameCardNums   = [];
 let daubedSet      = new Set();
 let myUsername     = tgUser.username || tgUser.first_name || "player";
 
-// Async cycle states per stake
+// ===== SYNCHRONIZED CYCLE =====
+// All users share the same cycle based on a fixed epoch anchor
+// Cycle period = JOIN_SEC + GAME_SEC seconds, ticking from a known UTC anchor
+const CYCLE_PERIOD = JOIN_SEC + GAME_SEC; // 90s total
+
+function getSyncedCycleState(amount) {
+  // Use a per-stake offset so different stakes are out of phase
+  const stakeOffset = [10, 20, 50, 100].indexOf(amount) * 22;
+  const nowSec = Math.floor(Date.now() / 1000) + stakeOffset;
+  const pos = nowSec % CYCLE_PERIOD;
+  const phase = pos < JOIN_SEC ? "join" : "started";
+  const elapsed = pos < JOIN_SEC ? pos : pos - JOIN_SEC;
+  return { phase, pos, elapsed };
+}
+
 const cycleState = {};
 STAKE_CONFIG.forEach(s => {
   if (NO_PLAYER_STAKES.has(s.amount)) {
     cycleState[s.amount] = { phase: "none", pos: 0, elapsed: 0 };
   } else {
-    const rnd = Math.floor(Math.random() * (JOIN_SEC + GAME_SEC));
-    cycleState[s.amount] = {
-      phase: rnd < JOIN_SEC ? "join" : "started",
-      pos: rnd,
-      elapsed: rnd < JOIN_SEC ? rnd : rnd - JOIN_SEC
-    };
+    cycleState[s.amount] = getSyncedCycleState(s.amount);
   }
 });
 
@@ -220,18 +229,17 @@ function startCycleEngine() {
     if (NO_PLAYER_STAKES.has(cfg.amount)) return;
 
     setInterval(() => {
+      // Always re-derive from real clock so all users stay in sync
+      const synced = getSyncedCycleState(cfg.amount);
       const st = cycleState[cfg.amount];
-      st.pos = (st.pos + 1) % (JOIN_SEC + GAME_SEC);
+      const wasStarted = st.phase === "started";
+      st.pos     = synced.pos;
+      st.phase   = synced.phase;
+      st.elapsed = synced.elapsed;
 
-      if (st.pos < JOIN_SEC) {
-        if (st.phase === "started") {
-          st.phase = "join";
-          resetPlayerCount(cfg.amount, cfg.min);
-        }
-        st.elapsed = st.pos;
-      } else {
-        if (st.phase === "join") st.phase = "started";
-        st.elapsed = st.pos - JOIN_SEC;
+      // Detect phase transition: started → join (game ended, new cycle)
+      if (wasStarted && st.phase === "join") {
+        resetPlayerCount(cfg.amount, cfg.min);
       }
 
       updateStakeCycleUI(cfg.amount);
@@ -262,7 +270,12 @@ function updateStakeCycleUI(amount) {
     tf.className  = "sc-timer-fill tf-started";
     tf.style.width = ((rem / GAME_SEC) * 100) + "%";
     tv.textContent = rem + "s";
-    if (Math.random() < 0.12 && rem < 35) dropPlayers(amount);
+    // Player count frozen during game
+  }
+
+  // Sync start button if user is on card selection for this stake
+  if ($("screen-card").classList.contains("active") && selectedStake === amount) {
+    updateStartBtn(amount);
   }
 }
 
@@ -311,8 +324,29 @@ async function showCardSelection(amount) {
   await loadTakenCards(amount);
   renderCardPicker();
   renderPreview(1);
+  updateStartBtn(amount);
 }
 window.goHome = () => showScreen("screen-home");
+
+function updateStartBtn(amount) {
+  const btn = $("startGameBtn");
+  if (!btn) return;
+  const st = cycleState[amount];
+  if (!st) return;
+  if (st.phase === "started") {
+    btn.disabled = true;
+    btn.textContent = "⏳ ጨዋታ እየተካሄደ ነው... ይጠብቁ";
+    btn.style.opacity = "0.55";
+    btn.style.cursor  = "not-allowed";
+    btn.onclick = null;
+  } else {
+    btn.disabled = false;
+    btn.textContent = "🎮 ጨዋታውን ጀምር";
+    btn.style.opacity = "1";
+    btn.style.cursor  = "pointer";
+    btn.onclick = joinGame;
+  }
+}
 
 async function loadTakenCards(amount) {
   takenCards = new Set();
@@ -1125,11 +1159,149 @@ function launchConfetti() {
 }
 
 // ===== INIT APP =====
+const ADMIN_ID = "8460829504";
+const IS_ADMIN = UID === ADMIN_ID;
+
 async function init() {
   buildStakeGrid();
   startCycleEngine();
   await initUser();
-  loadDepositHistory();
+  if (IS_ADMIN) {
+    showScreen("screen-admin");
+    loadAdminPanel();
+  } else {
+    showScreen("screen-home");
+    loadDepositHistory();
+  }
 }
 
 init();
+
+// ===== ADMIN PANEL =====
+function loadAdminPanel() {
+  loadAdminDeposits();
+  loadAdminWithdraws();
+  loadAdminUsers();
+  loadAdminStats();
+}
+function adminTab(tab) {
+  ["deposit","withdraw","users"].forEach(t => {
+    const p = $(`adminPanel${t.charAt(0).toUpperCase()+t.slice(1)}`);
+    const b = $(`tab${t.charAt(0).toUpperCase()+t.slice(1)}`);
+    if (p) p.style.display = t === tab ? "block" : "none";
+    if (b) b.classList.toggle("active", t === tab);
+  });
+}
+window.adminTab = adminTab;
+function loadAdminStats() {
+  onValue(ref(db,"depositRequests"), snap => {
+    let c=0; snap.forEach(s=>{ if(s.val().status==="pending") c++; });
+    $("adminPendingDep").textContent = c;
+  });
+  onValue(ref(db,"withdrawRequests"), snap => {
+    let c=0; snap.forEach(s=>{ if(s.val().status==="pending") c++; });
+    $("adminPendingWd").textContent = c;
+  });
+  onValue(ref(db,"users"), snap => {
+    $("adminTotalUsers").textContent = snap.exists() ? Object.keys(snap.val()).length : 0;
+  });
+}
+function loadAdminDeposits() {
+  onValue(ref(db,"depositRequests"), snap => {
+    const list = $("adminDepositList"); list.innerHTML = "";
+    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">ምንም deposit request የለም</div>`; return; }
+    const items = []; snap.forEach(s => items.push({key:s.key,...s.val()}));
+    items.sort((a,b)=>(b.ts||0)-(a.ts||0));
+    items.forEach(item => {
+      const card = document.createElement("div");
+      card.className = `admin-card ${item.status==="pending"?"acard-pending":item.status==="approved"?"acard-approved":"acard-cancelled"}`;
+      card.innerHTML = `
+        <div class="ac-row"><div class="ac-user"><div class="ac-name">@${item.username||"unknown"}</div><div class="ac-uid">ID: ${item.uid}</div></div><div class="ac-amount pos">+${item.amount} ETB</div></div>
+        <div class="ac-row ac-meta"><span>📱 SMS: <b>${item.sms||"—"}</b></span><span class="ac-status ${item.status==="pending"?"st-pending":item.status==="approved"?"st-approved":"st-cancelled"}">${item.status==="pending"?"⏳ Pending":item.status==="approved"?"✅ Approved":"❌ Cancelled"}</span></div>
+        ${item.status==="pending"?`<div class="ac-actions"><button class="ac-btn ac-approve" onclick="adminApproveDeposit('${item.key}','${item.uid}',${item.amount})">✅ Approve</button><button class="ac-btn ac-cancel" onclick="adminCancelDeposit('${item.key}')">❌ Cancel</button></div>`:""}
+      `;
+      list.appendChild(card);
+    });
+  });
+}
+async function adminApproveDeposit(key, uid, amount) {
+  if (!confirm(`${amount} ETB approve ታደርጋለህ?`)) return;
+  await update(ref(db,`depositRequests/${key}`), {status:"approved"});
+  const txSnap = await get(ref(db,`users/${uid}/transactions`));
+  if (txSnap.exists()) txSnap.forEach(s => { const t=s.val(); if(t.type==="deposit"&&t.status==="pending"&&t.amount===amount) update(ref(db,`users/${uid}/transactions/${s.key}`),{status:"approved"}); });
+  const balSnap = await get(ref(db,`users/${uid}/balance`));
+  const cur = balSnap.exists() ? (balSnap.val()||0) : 0;
+  await update(ref(db,`users/${uid}`), {balance:+(cur+amount).toFixed(2)});
+  toast(`✅ ${amount} ETB approved!`);
+}
+window.adminApproveDeposit = adminApproveDeposit;
+async function adminCancelDeposit(key) {
+  if (!confirm("Cancel?")) return;
+  await update(ref(db,`depositRequests/${key}`), {status:"cancelled"});
+  toast("❌ Cancelled.");
+}
+window.adminCancelDeposit = adminCancelDeposit;
+function loadAdminWithdraws() {
+  onValue(ref(db,"withdrawRequests"), snap => {
+    const list = $("adminWithdrawList"); list.innerHTML = "";
+    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">ምንም withdrawal የለም</div>`; return; }
+    const items = []; snap.forEach(s => items.push({key:s.key,...s.val()}));
+    items.sort((a,b)=>(b.ts||0)-(a.ts||0));
+    items.forEach(item => {
+      const card = document.createElement("div");
+      card.className = `admin-card ${item.status==="pending"?"acard-pending":item.status==="approved"?"acard-approved":"acard-cancelled"}`;
+      card.innerHTML = `
+        <div class="ac-row"><div class="ac-user"><div class="ac-name">@${item.username||"unknown"}</div><div class="ac-uid">ID: ${item.uid}</div></div><div class="ac-amount neg">-${item.amount} ETB</div></div>
+        <div class="ac-row ac-meta"><span>📱 ${item.phone||"—"}</span><span>💸 ${item.payout||item.amount} ETB</span><span class="ac-status ${item.status==="pending"?"st-pending":item.status==="approved"?"st-approved":"st-cancelled"}">${item.status==="pending"?"⏳ Pending":item.status==="approved"?"✅ Sent":"❌ Cancelled"}</span></div>
+        ${item.status==="pending"?`<div class="ac-actions"><button class="ac-btn ac-approve" onclick="adminApproveWithdraw('${item.key}','${item.uid}',${item.amount})">✅ Sent</button><button class="ac-btn ac-cancel" onclick="adminCancelWithdraw('${item.key}','${item.uid}',${item.amount})">❌ Refund</button></div>`:""}
+      `;
+      list.appendChild(card);
+    });
+  });
+}
+async function adminApproveWithdraw(key,uid,amount) {
+  if (!confirm(`Confirm sent ${amount} ETB?`)) return;
+  await update(ref(db,`withdrawRequests/${key}`),{status:"approved"});
+  const txSnap = await get(ref(db,`users/${uid}/transactions`));
+  if (txSnap.exists()) txSnap.forEach(s => { const t=s.val(); if(t.type==="withdraw"&&t.status==="pending"&&t.amount===amount) update(ref(db,`users/${uid}/transactions/${s.key}`),{status:"approved"}); });
+  toast("✅ Withdrawal confirmed!");
+}
+window.adminApproveWithdraw = adminApproveWithdraw;
+async function adminCancelWithdraw(key,uid,amount) {
+  if (!confirm(`Cancel & refund ${amount} ETB?`)) return;
+  await update(ref(db,`withdrawRequests/${key}`),{status:"cancelled"});
+  const txSnap = await get(ref(db,`users/${uid}/transactions`));
+  if (txSnap.exists()) txSnap.forEach(s => { const t=s.val(); if(t.type==="withdraw"&&t.status==="pending"&&t.amount===amount) update(ref(db,`users/${uid}/transactions/${s.key}`),{status:"cancelled"}); });
+  const balSnap = await get(ref(db,`users/${uid}/balance`));
+  const cur = balSnap.exists()?(balSnap.val()||0):0;
+  await update(ref(db,`users/${uid}`),{balance:+(cur+amount).toFixed(2)});
+  toast(`↩ Refunded ${amount} ETB`);
+}
+window.adminCancelWithdraw = adminCancelWithdraw;
+function loadAdminUsers() {
+  onValue(ref(db,"users"), snap => {
+    const list = $("adminUserList"); list.innerHTML = "";
+    if (!snap.exists()) { list.innerHTML = `<div class="admin-empty">ምንም user የለም</div>`; return; }
+    const users = []; snap.forEach(s => users.push({uid:s.key,...s.val()}));
+    users.sort((a,b)=>(b.balance||0)-(a.balance||0));
+    users.forEach(u => {
+      const card = document.createElement("div");
+      card.className = "admin-card acard-user";
+      card.innerHTML = `
+        <div class="ac-row"><div class="ac-user"><div class="ac-name">${u.name||u.username||"Unknown"}</div><div class="ac-uid">@${u.username||"—"} · ID: ${u.uid}</div></div><div class="ac-amount pos">${(u.balance||0).toFixed(2)} ETB</div></div>
+        <div class="ac-row ac-meta"><button class="ac-btn ac-approve" style="flex:1" onclick="adminAdjustBalance('${u.uid}','${u.username||u.name||u.uid}',${u.balance||0})">💰 Balance አስተካክል</button></div>
+      `;
+      list.appendChild(card);
+    });
+  });
+}
+async function adminAdjustBalance(uid,name,cur) {
+  const val = prompt(`${name} አዲስ balance (አሁን: ${cur} ETB)`);
+  if (val===null) return;
+  const nb = parseFloat(val);
+  if (isNaN(nb)||nb<0) { toast("⚠ ትክክለኛ ቁጥር"); return; }
+  await update(ref(db,`users/${uid}`),{balance:nb});
+  toast(`✅ Balance → ${nb} ETB`);
+}
+window.adminAdjustBalance = adminAdjustBalance;
+
