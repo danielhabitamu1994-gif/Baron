@@ -1272,11 +1272,11 @@ function adminTab(tab) {
 window.adminTab = adminTab;
 function loadAdminStats() {
   onValue(ref(db,"depositRequests"), snap => {
-    let c=0; snap.forEach(s=>{ if(s.val().status==="pending") c++; });
+    let c=0; snap.forEach(s=>{ const st=s.val().status; if(!st||st==="pending") c++; });
     $("adminPendingDep").textContent = c;
   });
   onValue(ref(db,"withdrawRequests"), snap => {
-    let c=0; snap.forEach(s=>{ if(s.val().status==="pending") c++; });
+    let c=0; snap.forEach(s=>{ const st=s.val().status; if(!st||st==="pending") c++; });
     $("adminPendingWd").textContent = c;
   });
   onValue(ref(db,"users"), snap => {
@@ -1294,13 +1294,14 @@ function loadAdminDeposits() {
     }
     const items = [];
     snap.forEach(s => items.push({ key: s.key, ...s.val() }));
+    const isPend = s => !s.status || s.status === "pending";
     items.sort((a, b) => {
-      if (a.status === "pending" && b.status !== "pending") return -1;
-      if (b.status === "pending" && a.status !== "pending") return 1;
+      if (isPend(a) && !isPend(b)) return -1;
+      if (isPend(b) && !isPend(a)) return 1;
       return (b.ts || 0) - (a.ts || 0);
     });
     items.forEach(item => {
-      const isPending = !item.status || item.status === "pending";
+      const isPending = isPend(item);
       const card = document.createElement("div");
       card.className = "admin-card " + (isPending ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled");
 
