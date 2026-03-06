@@ -56,7 +56,7 @@
       <span></span><span></span><span></span>
     </button>
     <div class="top-logo">BARON<span>BINGO</span></div>
-    <div class="top-balance" onclick="openDeposit()">
+    <div class="top-balance" onclick="openWalletModal()">
       <span class="tb-coin">💰</span>
       <span id="topBalance">0</span>
     </div>
@@ -226,6 +226,32 @@
       <div class="admin-panel" id="adminPanelUsers" style="display:none"><div id="adminUserList" class="admin-list"></div></div>
     </section>
 
+    <!-- ===== SCREEN: WITHDRAW ===== -->
+    <section class="screen" id="screen-withdraw">
+      <div class="sub-header">
+        <button class="back-btn" onclick="goHome()">❮</button>
+        <div class="sub-title">Withdraw</div>
+        <div class="sub-badge" style="background:rgba(255,165,0,0.2);color:#ffa500;">TeleBirr</div>
+      </div>
+      <div class="deposit-card">
+        <div class="dc-title">📤 ገንዘብ ማውጫ</div>
+        <div class="withdraw-balance-box">
+          <span class="wbb-label">ቀሪ ሂሳብ</span>
+          <span class="wbb-amount" id="withdrawBalanceDisplay">0 ETB</span>
+        </div>
+        <div class="dc-field-label">TeleBirr ቁጥር</div>
+        <input type="tel" class="dc-input" id="wdPhone" placeholder="09XXXXXXXX" maxlength="10" />
+        <div class="dc-field-label">የሚወጣ መጠን (ቢያንስ 50 ETB)</div>
+        <input type="number" class="dc-input" id="wdAmount" placeholder="100" min="50" />
+        <div class="withdraw-note"><span>⚠</span><span>5% የአገልግሎት ክፍያ ይቀነሳል። ከ24 ሰዓት ውስጥ ይደርሳል።</span></div>
+        <button class="cta-btn withdraw-cta" style="margin-top:16px" onclick="submitWithdraw()">📤 ጥያቄ ላክ</button>
+      </div>
+      <div class="history-section">
+        <div class="hs-title">📋 የቅርብ ጊዜ ክፍያዎች</div>
+        <div id="withdrawHistory"></div>
+      </div>
+    </section>
+
     <!-- ===== SCREEN: TRANSACTION HISTORY ===== -->
     <section class="screen" id="screen-history">
       <div class="sub-header">
@@ -237,10 +263,39 @@
 
   </main>
 
+  <!-- WALLET MODAL -->
+  <div class="wallet-modal-overlay" id="walletModalOverlay" onclick="closeWalletModal()"></div>
+  <div class="wallet-modal" id="walletModal">
+    <div class="wm-inner">
+      <div class="wm-header">
+        <span class="wm-label">ሂሳብ አስተዳደር</span>
+        <button class="wm-close-btn" onclick="closeWalletModal()">✕</button>
+      </div>
+      <div class="wm-balance-row">
+        <span class="wm-coin">💰</span>
+        <span class="wm-balance" id="wmBalance">0</span>
+        <span class="wm-curr-tag">ETB</span>
+      </div>
+      <div class="wm-buttons">
+        <button class="wm-btn wm-deposit" onclick="closeWalletModal(); openDeposit()">
+          <span class="wm-btn-icon">📥</span>
+          <span class="wm-btn-name">Deposit</span>
+          <span class="wm-btn-sub">ገንዘብ ያስገቡ</span>
+        </button>
+        <button class="wm-btn wm-withdraw" onclick="closeWalletModal(); openWithdraw()">
+          <span class="wm-btn-icon">📤</span>
+          <span class="wm-btn-name">Withdraw</span>
+          <span class="wm-btn-sub">ገንዘብ ያውጡ</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Confetti container -->
   <div class="confetti-wrap" id="confettiWrap"></div>
 
   <!-- Firebase -->
   <script type="module" src="script.js"></script>
 </body>
-</html>
+          </html>
+          
