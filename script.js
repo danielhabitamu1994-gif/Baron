@@ -465,6 +465,15 @@ async function joinGame() {
   // Deduct stake
   await update(ref(db, `users/${UID}`), { balance: userBalance - selectedStake });
 
+  // Record stake transaction so it appears in history
+  const stakeTxRef = push(ref(db, `users/${UID}/transactions`));
+  await set(stakeTxRef, {
+    type:   "stake",
+    amount: selectedStake,
+    cardNo: selectedCardNo,
+    ts:     Date.now()
+  });
+
   // Find or create room
   const roomId = await findOrCreateRoom(selectedStake);
   currentRoomId = roomId;
@@ -917,7 +926,7 @@ async function shoutBingo() {
   const txRef = push(ref(db, `users/${UID}/transactions`));
   await set(txRef, {
     type: "win", amount: prize, roomId: currentRoomId,
-    stake: room.stake, ts: serverTimestamp()
+    stake: room.stake, ts: Date.now()
   });
 
   if (callerInterval) { clearInterval(callerInterval); callerInterval = null; }
@@ -1076,7 +1085,7 @@ async function submitDeposit() {
     sms,
     uid: UID,
     username: tgUser.username || myUsername,
-    ts: serverTimestamp()
+    ts: Date.now()
   });
 
   // Also save to admin requests
@@ -1098,6 +1107,50 @@ async function submitDeposit() {
 }
 window.submitDeposit = submitDeposit;
 
+// ===== DATE FORMATTER =====
+function fmtDate(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (isNaN(d)) return "";
+  return d.toLocaleString("am-ET", {
+    timeZone:  "Africa/Addis_Ababa",
+    day:       "numeric",
+    month:     "short",
+    hour:      "2-digit",
+    minute:    "2-digit"
+  });
+}
+
+// ===== TRANSACTION CARD BUILDER =====
+function _txCard(t) {
+  const isPos = t.type === "win" || t.type === "deposit";
+  const icons = { win:"🏆", deposit:"📥", withdraw:"📤", stake:"🎯" };
+  const labels = { win:"ድል", deposit:"Deposit", withdraw:"Withdraw", stake:"Stake" };
+  const icon  = icons[t.type]  || "🔄";
+  const label = labels[t.type] || t.type;
+
+  const el = document.createElement("div");
+  el.className = `hist-item hist-${t.type === "win" ? "win" : t.type === "deposit" ? "dep" : "bet"}` +
+                 (t.status === "pending" ? " hist-pending" : "");
+  el.innerHTML = `
+    <div class="hist-label">
+      ${icon} ${label}${t.stake ? " — " + t.stake + " ETB stake" : t.phone ? " → " + t.phone : ""}
+      <div class="hist-date">${fmtDate(t.ts)}</div>
+    </div>
+    <div class="hist-right">
+      <div class="hist-amount ${isPos ? "pos" : "neg"}">${isPos ? "+" : "-"}${t.amount} ETB</div>
+      ${t.status === "pending"
+        ? `<div class="hist-status">⏳ Pending...</div>`
+        : t.status === "approved"
+        ? `<div class="hist-status" style="color:var(--green)">✅ Approved</div>`
+        : t.status === "cancelled"
+        ? `<div class="hist-status" style="color:#ff4444">❌ Cancelled</div>`
+        : ""}
+    </div>
+  `;
+  return el;
+}
+
 // Single persistent listener — started once at app init, never re-created
 let _depHistStarted = false;
 function loadDepositHistory() {
@@ -1107,26 +1160,19 @@ function loadDepositHistory() {
     const container = $("depositHistory");
     if (!container) return;
     container.innerHTML = "";
-    if (!snap.exists()) return;
+
+    if (!snap.exists()) {
+      container.innerHTML = `<div style="text-align:center;color:var(--text-dim);padding:20px;font-family:var(--font-am)">ምንም ግብይት የለም</div>`;
+      return;
+    }
+
     const txs = [];
     snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
-    txs.filter(t => t.type === "deposit")
-       .sort((a, b) => (b.ts || 0) - (a.ts || 0))
-       .slice(0, 8)
-       .forEach(t => {
-         const el = document.createElement("div");
-         el.className = `hist-item hist-dep ${t.status === "pending" ? "hist-pending" : ""}`;
-         el.innerHTML = `
-           <div class="hist-label">📥 Deposit</div>
-           <div class="hist-right">
-             <div class="hist-amount pos">+${t.amount} ETB</div>
-             ${t.status === "pending"
-               ? `<div class="hist-status">⏳ Pending...</div>`
-               : `<div class="hist-status" style="color:var(--green)">✅ Approved</div>`}
-           </div>
-         `;
-         container.appendChild(el);
-       });
+
+    // Show ALL recent transactions (last 10) — not just deposits
+    txs.sort((a, b) => (b.ts || 0) - (a.ts || 0))
+       .slice(0, 10)
+       .forEach(t => container.appendChild(_txCard(t)));
   });
 }
 
@@ -1149,7 +1195,7 @@ async function submitWithdraw() {
   $("withdrawBalanceDisplay").textContent = userBalance.toFixed(2) + " ETB";
 
   const txRef = push(ref(db, `users/${UID}/transactions`));
-  await set(txRef, { type:"withdraw", status:"pending", amount:amt, fee, payout, phone, uid:UID, username: tgUser.username||myUsername, ts: serverTimestamp() });
+  await set(txRef, { type:"withdraw", status:"pending", amount:amt, fee, payout, phone, uid:UID, username: tgUser.username||myUsername, ts: Date.now() });
 
   const adminRef = push(ref(db, `withdrawRequests`));
   await set(adminRef, { uid:UID, username: tgUser.username||myUsername, name:`${tgUser.first_name||""} ${tgUser.last_name||""}`.trim(), amount:amt, fee, payout, phone, status:"pending", ts: serverTimestamp() });
@@ -1159,27 +1205,30 @@ async function submitWithdraw() {
 }
 window.submitWithdraw = submitWithdraw;
 
+let _wdHistStarted = false;
 function loadWithdrawHistory() {
   const container = $("withdrawHistory");
   if (!container) return;
-  onValue(ref(db, `users/${UID}/transactions`), snap => {
-    container.innerHTML = "";
-    if (!snap.exists()) return;
-    const txs = [];
-    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
-    txs.filter(t => t.type === "withdraw").reverse().slice(0, 8).forEach(t => {
-      const el = document.createElement("div");
-      el.className = `hist-item hist-bet ${t.status === "pending" ? "hist-pending" : ""}`;
-      el.innerHTML = `
-        <div class="hist-label">📤 Withdraw → ${t.phone||""}</div>
-        <div class="hist-right">
-          <div class="hist-amount neg">-${t.amount} ETB</div>
-          ${t.status === "pending" ? `<div class="hist-status">⏳ Pending...</div>` : `<div class="hist-status" style="color:var(--green)">✅ ተላልፏል</div>`}
-        </div>
-      `;
-      container.appendChild(el);
+
+  // If listener not yet started, start it once
+  if (!_wdHistStarted) {
+    _wdHistStarted = true;
+    onValue(ref(db, `users/${UID}/transactions`), snap => {
+      const c = $("withdrawHistory");
+      if (!c) return;
+      c.innerHTML = "";
+      if (!snap.exists()) {
+        c.innerHTML = `<div style="text-align:center;color:var(--text-dim);padding:20px;font-family:var(--font-am)">ምንም ግብይት የለም</div>`;
+        return;
+      }
+      const txs = [];
+      snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+      txs.filter(t => t.type === "withdraw")
+         .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+         .slice(0, 8)
+         .forEach(t => c.appendChild(_txCard(t)));
     });
-  });
+  }
 }
 window.loadWithdrawHistory = loadWithdrawHistory;
 
@@ -1195,21 +1244,8 @@ async function showHistory() {
   }
   const txs = [];
   snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
-  txs.reverse().forEach(t => {
-    const el = document.createElement("div");
-    const cls = t.type === "win" ? "hist-win" : t.type === "deposit" ? "hist-dep" : "hist-bet";
-    const icon = t.type === "win" ? "🏆" : t.type === "deposit" ? "📥" : "🎯";
-    const pos = t.type === "win" || t.type === "deposit";
-    el.className = `hist-item ${cls}`;
-    el.innerHTML = `
-      <div class="hist-label">${icon} ${t.type === "win" ? "ድል" : t.type === "deposit" ? "Deposit" : "Stake"} — ${t.stake||t.amount} ETB</div>
-      <div class="hist-right">
-        <div class="hist-amount ${pos?"pos":"neg"}">${pos?"+":"-"}${t.amount} ETB</div>
-        ${t.status === "pending" ? `<div class="hist-status">⏳ Pending</div>` : ""}
-      </div>
-    `;
-    container.appendChild(el);
-  });
+  txs.sort((a, b) => (b.ts || 0) - (a.ts || 0))
+     .forEach(t => container.appendChild(_txCard(t)));
 }
 window.showHistory = showHistory;
 
