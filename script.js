@@ -465,15 +465,6 @@ async function joinGame() {
   // Deduct stake
   await update(ref(db, `users/${UID}`), { balance: userBalance - selectedStake });
 
-  // Record stake transaction so it appears in history
-  const stakeTxRef = push(ref(db, `users/${UID}/transactions`));
-  await set(stakeTxRef, {
-    type:   "stake",
-    amount: selectedStake,
-    cardNo: selectedCardNo,
-    ts:     Date.now()
-  });
-
   // Find or create room
   const roomId = await findOrCreateRoom(selectedStake);
   currentRoomId = roomId;
@@ -1076,8 +1067,10 @@ async function submitDeposit() {
   if (!amt || amt < 50) { toast("⚠ ቢያንስ 50 ETB ያስገቡ!"); return; }
   if (!sms) { toast("⚠ SMS ማረጋገጫ ያስፈልጋል!"); return; }
 
-  // Save pending request to Firebase
+  // Save pending request to Firebase — push() guarantees a unique key every time
+  const nowTs = Date.now();
   const txRef = push(ref(db, `users/${UID}/transactions`));
+  const txKey = txRef.key;
   await set(txRef, {
     type: "deposit",
     status: "pending",
@@ -1085,19 +1078,20 @@ async function submitDeposit() {
     sms,
     uid: UID,
     username: tgUser.username || myUsername,
-    ts: Date.now()
+    ts: nowTs           // numeric ms — sortable immediately, no server round-trip needed
   });
 
-  // Also save to admin requests
+  // Save to admin deposits node — push() so every deposit gets its own entry
   const adminRef = push(ref(db, `depositRequests`));
   await set(adminRef, {
     uid: UID,
+    txKey,              // link back to user transaction for status sync
     username: tgUser.username || myUsername,
     name: `${tgUser.first_name||""} ${tgUser.last_name||""}`.trim(),
     amount: amt,
     sms,
     status: "pending",
-    ts: serverTimestamp()
+    ts: nowTs
   });
 
   $("depAmount").value = "";
@@ -1107,34 +1101,38 @@ async function submitDeposit() {
 }
 window.submitDeposit = submitDeposit;
 
-// ===== DATE FORMATTER =====
+// ===== DATE FORMATTER (Ethiopian local time) =====
 function fmtDate(ts) {
-  if (!ts) return "";
-  const d = new Date(ts);
-  if (isNaN(d)) return "";
-  return d.toLocaleString("am-ET", {
-    timeZone:  "Africa/Addis_Ababa",
-    day:       "numeric",
-    month:     "short",
-    hour:      "2-digit",
-    minute:    "2-digit"
-  });
+  if (!ts || isNaN(ts)) return "";
+  try {
+    return new Date(ts).toLocaleString("am-ET", {
+      timeZone: "Africa/Addis_Ababa",
+      day: "2-digit", month: "short",
+      hour: "2-digit", minute: "2-digit"
+    });
+  } catch(e) {
+    return new Date(ts).toLocaleString();
+  }
 }
 
-// ===== TRANSACTION CARD BUILDER =====
-function _txCard(t) {
-  const isPos = t.type === "win" || t.type === "deposit";
-  const icons = { win:"🏆", deposit:"📥", withdraw:"📤", stake:"🎯" };
-  const labels = { win:"ድል", deposit:"Deposit", withdraw:"Withdraw", stake:"Stake" };
-  const icon  = icons[t.type]  || "🔄";
-  const label = labels[t.type] || t.type;
+// ===== SHARED TRANSACTION CARD BUILDER =====
+function buildTxCard(t) {
+  const isPos    = t.type === "win" || t.type === "deposit";
+  const icons    = { win:"🏆", deposit:"📥", withdraw:"📤", stake:"🎯" };
+  const labels   = { win:"ድል", deposit:"Deposit", withdraw:"Withdraw", stake:"Stake" };
+  const icon     = icons[t.type]  || "🔄";
+  const label    = labels[t.type] || t.type;
+  const typeClass = t.type === "win" ? "hist-win"
+                  : t.type === "deposit" ? "hist-dep"
+                  : "hist-bet";
+  const detail   = t.type === "withdraw" && t.phone ? ` → ${t.phone}`
+                 : t.stake ? ` (stake: ${t.stake} ETB)` : "";
 
   const el = document.createElement("div");
-  el.className = `hist-item hist-${t.type === "win" ? "win" : t.type === "deposit" ? "dep" : "bet"}` +
-                 (t.status === "pending" ? " hist-pending" : "");
+  el.className = `hist-item ${typeClass}${t.status === "pending" ? " hist-pending" : ""}`;
   el.innerHTML = `
     <div class="hist-label">
-      ${icon} ${label}${t.stake ? " — " + t.stake + " ETB stake" : t.phone ? " → " + t.phone : ""}
+      ${icon} ${label}${detail}
       <div class="hist-date">${fmtDate(t.ts)}</div>
     </div>
     <div class="hist-right">
@@ -1142,37 +1140,73 @@ function _txCard(t) {
       ${t.status === "pending"
         ? `<div class="hist-status">⏳ Pending...</div>`
         : t.status === "approved"
-        ? `<div class="hist-status" style="color:var(--green)">✅ Approved</div>`
+        ? `<div class="hist-status approved">✅ Approved</div>`
         : t.status === "cancelled"
-        ? `<div class="hist-status" style="color:#ff4444">❌ Cancelled</div>`
+        ? `<div class="hist-status cancelled">❌ Cancelled</div>`
         : ""}
-    </div>
-  `;
+    </div>`;
   return el;
 }
 
-// Single persistent listener — started once at app init, never re-created
-let _depHistStarted = false;
+// ===== DEPOSIT HISTORY =====
+// One persistent onValue listener — started once, re-renders on every DB change.
+// Calling loadDepositHistory() multiple times is safe; listener is only registered once.
+let _depHistUnsubscribe = null;
 function loadDepositHistory() {
-  if (_depHistStarted) return; // already listening
-  _depHistStarted = true;
-  onValue(ref(db, `users/${UID}/transactions`), snap => {
+  if (_depHistUnsubscribe) return; // already live
+
+  _depHistUnsubscribe = onValue(ref(db, `users/${UID}/transactions`), snap => {
     const container = $("depositHistory");
     if (!container) return;
+
+    // ── Clear first — this is what prevents the "only first item" bug ──
     container.innerHTML = "";
 
     if (!snap.exists()) {
-      container.innerHTML = `<div style="text-align:center;color:var(--text-dim);padding:20px;font-family:var(--font-am)">ምንም ግብይት የለም</div>`;
+      container.innerHTML = `<div class="hist-empty">ምንም ግብይት የለም</div>`;
+      return;
+    }
+
+    // Collect ALL children, sort newest-first, show last 10
+    const txs = [];
+    snap.forEach(child => txs.push({ ...child.val(), key: child.key }));
+
+    txs
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0))  // newest first
+      .slice(0, 10)
+      .forEach(t => container.appendChild(buildTxCard(t)));
+  });
+}
+
+// ===== WITHDRAW HISTORY =====
+// Same pattern — one persistent listener, re-renders on every change.
+let _wdHistUnsubscribe = null;
+function loadWithdrawHistory() {
+  const container = $("withdrawHistory");
+  if (!container) return;
+
+  if (_wdHistUnsubscribe) return; // already live
+
+  _wdHistUnsubscribe = onValue(ref(db, `users/${UID}/transactions`), snap => {
+    const c = $("withdrawHistory");
+    if (!c) return;
+
+    // ── Clear first ──
+    c.innerHTML = "";
+
+    if (!snap.exists()) {
+      c.innerHTML = `<div class="hist-empty">ምንም ግብይት የለም</div>`;
       return;
     }
 
     const txs = [];
-    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+    snap.forEach(child => txs.push({ ...child.val(), key: child.key }));
 
-    // Show ALL recent transactions (last 10) — not just deposits
-    txs.sort((a, b) => (b.ts || 0) - (a.ts || 0))
-       .slice(0, 10)
-       .forEach(t => container.appendChild(_txCard(t)));
+    txs
+      .filter(t => t.type === "withdraw")
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+      .slice(0, 10)
+      .forEach(t => c.appendChild(buildTxCard(t)));
   });
 }
 
@@ -1194,58 +1228,53 @@ async function submitWithdraw() {
   $("menuBalance").textContent   = userBalance.toFixed(2);
   $("withdrawBalanceDisplay").textContent = userBalance.toFixed(2) + " ETB";
 
+  const nowTs2 = Date.now();
   const txRef = push(ref(db, `users/${UID}/transactions`));
-  await set(txRef, { type:"withdraw", status:"pending", amount:amt, fee, payout, phone, uid:UID, username: tgUser.username||myUsername, ts: Date.now() });
+  const wdTxKey = txRef.key;
+  await set(txRef, { type:"withdraw", status:"pending", amount:amt, fee, payout, phone, uid:UID, username: tgUser.username||myUsername, ts: nowTs2 });
 
   const adminRef = push(ref(db, `withdrawRequests`));
-  await set(adminRef, { uid:UID, username: tgUser.username||myUsername, name:`${tgUser.first_name||""} ${tgUser.last_name||""}`.trim(), amount:amt, fee, payout, phone, status:"pending", ts: serverTimestamp() });
+  await set(adminRef, { uid:UID, txKey: wdTxKey, username: tgUser.username||myUsername, name:`${tgUser.first_name||""} ${tgUser.last_name||""}`.trim(), amount:amt, fee, payout, phone, status:"pending", ts: nowTs2 });
 
   $("wdPhone").value = ""; $("wdAmount").value = "";
   toast(`✅ ጥያቄዎ ተልኳል! ${payout} ETB ወደ ${phone} ይደርሳል`);
 }
 window.submitWithdraw = submitWithdraw;
 
-let _wdHistStarted = false;
-function loadWithdrawHistory() {
-  const container = $("withdrawHistory");
-  if (!container) return;
-
-  // If listener not yet started, start it once
-  if (!_wdHistStarted) {
-    _wdHistStarted = true;
-    onValue(ref(db, `users/${UID}/transactions`), snap => {
-      const c = $("withdrawHistory");
-      if (!c) return;
-      c.innerHTML = "";
-      if (!snap.exists()) {
-        c.innerHTML = `<div style="text-align:center;color:var(--text-dim);padding:20px;font-family:var(--font-am)">ምንም ግብይት የለም</div>`;
-        return;
-      }
-      const txs = [];
-      snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
-      txs.filter(t => t.type === "withdraw")
-         .sort((a, b) => (b.ts || 0) - (a.ts || 0))
-         .slice(0, 8)
-         .forEach(t => c.appendChild(_txCard(t)));
-    });
-  }
-}
 window.loadWithdrawHistory = loadWithdrawHistory;
 
-// ===== FULL HISTORY =====
-async function showHistory() {
+// ===== FULL TRANSACTION HISTORY =====
+// Uses a live onValue listener so the screen updates instantly when status changes.
+let _fullHistUnsubscribe = null;
+function showHistory() {
   showScreen("screen-history");
-  const snap = await get(ref(db, `users/${UID}/transactions`));
-  const container = $("fullHistory");
-  container.innerHTML = "";
-  if (!snap.exists()) {
-    container.innerHTML = `<div style="text-align:center;color:var(--text-dim);padding:40px;font-family:var(--font-am)">ምንም ግብይት የለም</div>`;
-    return;
+
+  // Detach previous listener if any (e.g. user navigated away and back)
+  if (_fullHistUnsubscribe) {
+    _fullHistUnsubscribe();
+    _fullHistUnsubscribe = null;
   }
-  const txs = [];
-  snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
-  txs.sort((a, b) => (b.ts || 0) - (a.ts || 0))
-     .forEach(t => container.appendChild(_txCard(t)));
+
+  _fullHistUnsubscribe = onValue(ref(db, `users/${UID}/transactions`), snap => {
+    const container = $("fullHistory");
+    if (!container) return;
+
+    // ── Clear first — prevents stale / duplicated rows ──
+    container.innerHTML = "";
+
+    if (!snap.exists()) {
+      container.innerHTML = `<div style="text-align:center;color:var(--text-dim);padding:40px;font-family:var(--font-am)">ምንም ግብይት የለም</div>`;
+      return;
+    }
+
+    // Collect ALL transaction types, sort newest-first
+    const txs = [];
+    snap.forEach(child => txs.push({ ...child.val(), key: child.key }));
+
+    txs
+      .sort((a, b) => (b.ts || 0) - (a.ts || 0))
+      .forEach(t => container.appendChild(buildTxCard(t)));
+  });
 }
 window.showHistory = showHistory;
 
