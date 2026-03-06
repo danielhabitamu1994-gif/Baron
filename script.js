@@ -131,7 +131,21 @@ function closeMenu() {
 }
 window.openMenu  = openMenu;
 window.closeMenu = closeMenu;
-window.openDeposit = () => showScreen("screen-deposit");
+window.openDeposit = () => { showScreen("screen-deposit"); loadDepositHistory(); };
+window.openWithdraw = () => {
+  showScreen("screen-withdraw");
+  $("withdrawBalanceDisplay").textContent = userBalance.toFixed(2) + " ETB";
+  loadWithdrawHistory();
+};
+window.openWalletModal = () => {
+  $("wmBalance").textContent = userBalance.toFixed(2);
+  $("walletModalOverlay").classList.add("active");
+  $("walletModal").classList.add("active");
+};
+window.closeWalletModal = () => {
+  $("walletModalOverlay").classList.remove("active");
+  $("walletModal").classList.remove("active");
+};
 
 // ===== UPDATE UI BALANCE =====
 function updateBalanceUI() {
@@ -1084,27 +1098,82 @@ async function submitDeposit() {
 }
 window.submitDeposit = submitDeposit;
 
-async function loadDepositHistory() {
-  const snap = await get(ref(db, `users/${UID}/transactions`));
+function loadDepositHistory() {
   const container = $("depositHistory");
-  container.innerHTML = "";
-  if (!snap.exists()) return;
-
-  const txs = [];
-  snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
-  txs.filter(t => t.type === "deposit").reverse().slice(0, 8).forEach(t => {
-    const el = document.createElement("div");
-    el.className = `hist-item hist-dep ${t.status === "pending" ? "hist-pending" : ""}`;
-    el.innerHTML = `
-      <div class="hist-label">📥 Deposit</div>
-      <div class="hist-right">
-        <div class="hist-amount pos">+${t.amount} ETB</div>
-        ${t.status === "pending" ? `<div class="hist-status">⏳ Pending...</div>` : `<div class="hist-status" style="color:var(--green)">✅ Approved</div>`}
-      </div>
-    `;
-    container.appendChild(el);
+  if (!container) return;
+  // Live listener — updates automatically when new transactions added
+  onValue(ref(db, `users/${UID}/transactions`), snap => {
+    container.innerHTML = "";
+    if (!snap.exists()) return;
+    const txs = [];
+    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+    txs.filter(t => t.type === "deposit").reverse().slice(0, 8).forEach(t => {
+      const el = document.createElement("div");
+      el.className = `hist-item hist-dep ${t.status === "pending" ? "hist-pending" : ""}`;
+      el.innerHTML = `
+        <div class="hist-label">📥 Deposit</div>
+        <div class="hist-right">
+          <div class="hist-amount pos">+${t.amount} ETB</div>
+          ${t.status === "pending" ? `<div class="hist-status">⏳ Pending...</div>` : `<div class="hist-status" style="color:var(--green)">✅ Approved</div>`}
+        </div>
+      `;
+      container.appendChild(el);
+    });
   });
 }
+
+// ===== WITHDRAW =====
+async function submitWithdraw() {
+  const phone = $("wdPhone").value.trim();
+  const amt   = parseFloat($("wdAmount").value);
+  if (!phone || phone.length < 10) { toast("⚠ ትክክለኛ TeleBirr ቁጥር ያስገቡ!"); return; }
+  if (!amt || amt < 50)            { toast("⚠ ቢያንስ 50 ETB ያስገቡ!");           return; }
+  if (amt > userBalance)           { toast("⚠ በቂ ሂሳብ የለዎትም!");              return; }
+
+  const fee    = +(amt * 0.05).toFixed(2);
+  const payout = +(amt - fee).toFixed(2);
+  const newBal = +(userBalance - amt).toFixed(2);
+
+  await update(ref(db, `users/${UID}`), { balance: newBal });
+  userBalance = newBal;
+  $("topBalance").textContent    = userBalance.toFixed(2);
+  $("menuBalance").textContent   = userBalance.toFixed(2);
+  $("withdrawBalanceDisplay").textContent = userBalance.toFixed(2) + " ETB";
+
+  const txRef = push(ref(db, `users/${UID}/transactions`));
+  await set(txRef, { type:"withdraw", status:"pending", amount:amt, fee, payout, phone, uid:UID, username: tgUser.username||myUsername, ts: serverTimestamp() });
+
+  const adminRef = push(ref(db, `withdrawRequests`));
+  await set(adminRef, { uid:UID, username: tgUser.username||myUsername, name:`${tgUser.first_name||""} ${tgUser.last_name||""}`.trim(), amount:amt, fee, payout, phone, status:"pending", ts: serverTimestamp() });
+
+  $("wdPhone").value = ""; $("wdAmount").value = "";
+  toast(`✅ ጥያቄዎ ተልኳል! ${payout} ETB ወደ ${phone} ይደርሳል`);
+}
+window.submitWithdraw = submitWithdraw;
+
+function loadWithdrawHistory() {
+  const container = $("withdrawHistory");
+  if (!container) return;
+  onValue(ref(db, `users/${UID}/transactions`), snap => {
+    container.innerHTML = "";
+    if (!snap.exists()) return;
+    const txs = [];
+    snap.forEach(s => txs.push({ ...s.val(), key: s.key }));
+    txs.filter(t => t.type === "withdraw").reverse().slice(0, 8).forEach(t => {
+      const el = document.createElement("div");
+      el.className = `hist-item hist-bet ${t.status === "pending" ? "hist-pending" : ""}`;
+      el.innerHTML = `
+        <div class="hist-label">📤 Withdraw → ${t.phone||""}</div>
+        <div class="hist-right">
+          <div class="hist-amount neg">-${t.amount} ETB</div>
+          ${t.status === "pending" ? `<div class="hist-status">⏳ Pending...</div>` : `<div class="hist-status" style="color:var(--green)">✅ ተላልፏል</div>`}
+        </div>
+      `;
+      container.appendChild(el);
+    });
+  });
+}
+window.loadWithdrawHistory = loadWithdrawHistory;
 
 // ===== FULL HISTORY =====
 async function showHistory() {
