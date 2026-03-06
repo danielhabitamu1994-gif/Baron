@@ -1254,325 +1254,402 @@ async function init() {
 
 init();
 
-// ===== ADMIN PANEL =====
 
-function isPend(status) {
-  return !status || status === "pending";
+// ===== ADMIN PANEL =====
+// Completely rewritten — no innerHTML, no ID selectors, pure DOM API
+
+// Helper: treat missing/null/undefined status as "pending"
+function isPend(st) {
+  return !st || st === "pending";
 }
+
+// Track if listeners already attached (prevent duplicates)
+let _adminListenersStarted = false;
 
 function loadAdminPanel() {
-  loadAdminStats();
-  loadAdminDeposits();
-  loadAdminWithdraws();
-  loadAdminUsers();
+  if (_adminListenersStarted) return;
+  _adminListenersStarted = true;
+  _listenStats();
+  _listenDeposits();
+  _listenWithdraws();
+  _listenUsers();
 }
 
+// ── Tab switching ──────────────────────────────────────────────
 function adminTab(tab) {
-  ["deposit","withdraw","users"].forEach(t => {
-    const key = t.charAt(0).toUpperCase() + t.slice(1);
-    const panel = document.getElementById("adminPanel" + key);
-    const btn   = document.getElementById("tab" + key);
-    if (panel) panel.style.display = (t === tab) ? "block" : "none";
-    if (btn)   btn.classList.toggle("active", t === tab);
+  const tabs   = ["deposit", "withdraw", "users"];
+  const panels = {
+    deposit:  document.getElementById("adminPanelDeposit"),
+    withdraw: document.getElementById("adminPanelWithdraw"),
+    users:    document.getElementById("adminPanelUsers")
+  };
+  const btns = {
+    deposit:  document.getElementById("tabDeposit"),
+    withdraw: document.getElementById("tabWithdraw"),
+    users:    document.getElementById("tabUsers")
+  };
+  tabs.forEach(t => {
+    if (panels[t]) panels[t].style.display = (t === tab) ? "block" : "none";
+    if (btns[t])   btns[t].classList.toggle("active", t === tab);
   });
 }
 window.adminTab = adminTab;
 
-function loadAdminStats() {
+// ── Stats counters ─────────────────────────────────────────────
+function _listenStats() {
   onValue(ref(db, "depositRequests"), snap => {
     let c = 0;
     if (snap.exists()) snap.forEach(s => { if (isPend(s.val().status)) c++; });
     const el = document.getElementById("adminPendingDep");
     if (el) el.textContent = c;
   });
+
   onValue(ref(db, "withdrawRequests"), snap => {
     let c = 0;
     if (snap.exists()) snap.forEach(s => { if (isPend(s.val().status)) c++; });
     const el = document.getElementById("adminPendingWd");
     if (el) el.textContent = c;
   });
+
   onValue(ref(db, "users"), snap => {
     const el = document.getElementById("adminTotalUsers");
     if (el) el.textContent = snap.exists() ? Object.keys(snap.val()).length : 0;
   });
 }
 
-function makeDepositCard(item) {
-  const pend = isPend(item.status);
-  const div  = document.createElement("div");
+// ── Build a card using pure DOM (no innerHTML, no ID selectors) ─
+function _buildCard(cardClass, rows) {
+  // rows = array of {type, content}
+  // type: "header" | "meta" | "actions"
+  const card = document.createElement("div");
+  card.className = "admin-card " + cardClass;
 
-  if (pend) {
-    div.className = "admin-card acard-pending";
-  } else if (item.status === "approved") {
-    div.className = "admin-card acard-approved";
-  } else {
-    div.className = "admin-card acard-cancelled";
-  }
+  rows.forEach(row => {
+    const rowEl = document.createElement("div");
+    rowEl.className = "ac-row" + (row.type === "meta" ? " ac-meta" : row.type === "actions" ? " ac-actions" : "");
+    row.content(rowEl);
+    card.appendChild(rowEl);
+  });
 
-  const statusHTML = pend
-    ? `<span class="ac-status st-pending">⏳ Pending</span>`
-    : item.status === "approved"
-      ? `<span class="ac-status st-approved">✅ Approved</span>`
-      : `<span class="ac-status st-cancelled">❌ Cancelled</span>`;
-
-  div.innerHTML =
-    `<div class="ac-row">` +
-      `<div class="ac-user">` +
-        `<div class="ac-name">@${item.username || "unknown"}</div>` +
-        `<div class="ac-uid">ID: ${item.uid}</div>` +
-      `</div>` +
-      `<div class="ac-amount pos">+${item.amount} ETB</div>` +
-    `</div>` +
-    `<div class="ac-row ac-meta">` +
-      `<span>📱 SMS: <b>${item.sms || "—"}</b></span>` +
-      `${statusHTML}` +
-    `</div>` +
-    (pend
-      ? `<div class="ac-actions">` +
-          `<button class="ac-btn ac-approve">✅ Approve</button>` +
-          `<button class="ac-btn ac-cancel">❌ Cancel</button>` +
-        `</div>`
-      : "");
-
-  if (pend) {
-    const btns = div.querySelectorAll(".ac-actions .ac-btn");
-    btns[0].addEventListener("click", function() { adminApproveDeposit(item.key, item.uid, item.amount); });
-    btns[1].addEventListener("click", function() { adminCancelDeposit(item.key); });
-  }
-  return div;
+  return card;
 }
 
-function loadAdminDeposits() {
+function _el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls)  e.className   = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function _statusBadge(status) {
+  const badge = _el("span", "ac-status");
+  if (isPend(status)) {
+    badge.className += " st-pending";
+    badge.textContent = "⏳ Pending";
+  } else if (status === "approved") {
+    badge.className += " st-approved";
+    badge.textContent = "✅ Approved";
+  } else {
+    badge.className += " st-cancelled";
+    badge.textContent = "❌ Cancelled";
+  }
+  return badge;
+}
+
+function _btn(label, cls, onClick) {
+  const b = _el("button", "ac-btn " + cls, label);
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+// ── Deposits ───────────────────────────────────────────────────
+function _makeDepCard(item) {
+  const pend  = isPend(item.status);
+  const cls   = pend ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled";
+  const card  = document.createElement("div");
+  card.className = "admin-card " + cls;
+
+  // Row 1: user info + amount
+  const row1 = document.createElement("div");
+  row1.className = "ac-row";
+  const userDiv  = _el("div", "ac-user");
+  userDiv.appendChild(_el("div", "ac-name", "@" + (item.username || "unknown")));
+  userDiv.appendChild(_el("div", "ac-uid",  "ID: " + item.uid));
+  row1.appendChild(userDiv);
+  row1.appendChild(_el("div", "ac-amount pos", "+" + item.amount + " ETB"));
+  card.appendChild(row1);
+
+  // Row 2: SMS + status badge
+  const row2 = document.createElement("div");
+  row2.className = "ac-row ac-meta";
+  const smsSpan = _el("span", null, "📱 SMS: ");
+  const smsBold = _el("b", null, item.sms || "—");
+  smsSpan.appendChild(smsBold);
+  row2.appendChild(smsSpan);
+  row2.appendChild(_statusBadge(item.status));
+  card.appendChild(row2);
+
+  // Row 3: Action buttons (only if pending)
+  if (pend) {
+    const row3 = document.createElement("div");
+    row3.className = "ac-actions";
+    row3.appendChild(_btn("✅ Approve", "ac-approve", () => _approveDeposit(item.key, item.uid, item.amount)));
+    row3.appendChild(_btn("❌ Cancel",  "ac-cancel",  () => _cancelDeposit(item.key)));
+    card.appendChild(row3);
+  }
+
+  return card;
+}
+
+function _listenDeposits() {
   onValue(ref(db, "depositRequests"), snap => {
     const list = document.getElementById("adminDepositList");
     if (!list) return;
-    list.innerHTML = "";
+
+    // Clear
+    while (list.firstChild) list.removeChild(list.firstChild);
 
     if (!snap.exists()) {
-      list.innerHTML = '<div class="admin-empty">ምንም deposit request የለም</div>';
+      list.appendChild(_el("div", "admin-empty", "ምንም deposit request የለም"));
       return;
     }
 
     const items = [];
-    snap.forEach(s => items.push({ key: s.key, ...s.val() }));
-
-    items.sort((a, b) => {
-      const ap = isPend(a.status) ? 0 : 1;
-      const bp = isPend(b.status) ? 0 : 1;
-      if (ap !== bp) return ap - bp;
-      return (b.ts || 0) - (a.ts || 0);
+    snap.forEach(s => {
+      const v = s.val();
+      items.push({
+        key:      s.key,
+        uid:      v.uid      || "",
+        username: v.username || "",
+        amount:   v.amount   || 0,
+        sms:      v.sms      || "",
+        status:   v.status,      // may be undefined — isPend() handles it
+        ts:       v.ts       || 0
+      });
     });
 
-    items.forEach(item => list.appendChild(makeDepositCard(item)));
+    // Sort: pending first, then newest
+    items.sort((a, b) => {
+      const pa = isPend(a.status) ? 0 : 1;
+      const pb = isPend(b.status) ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      return b.ts - a.ts;
+    });
+
+    items.forEach(item => list.appendChild(_makeDepCard(item)));
   });
 }
 
-async function adminApproveDeposit(key, uid, amount) {
+async function _approveDeposit(key, uid, amount) {
   if (!confirm(amount + " ETB approve ታደርጋለህ?")) return;
   try {
     await update(ref(db, "depositRequests/" + key), { status: "approved" });
 
+    // Update user transaction
     const txSnap = await get(ref(db, "users/" + uid + "/transactions"));
     if (txSnap.exists()) {
-      const updates = {};
+      const upd = {};
       txSnap.forEach(s => {
         const t = s.val();
-        if (t.type === "deposit" && isPend(t.status) && t.amount === amount) {
-          updates["users/" + uid + "/transactions/" + s.key + "/status"] = "approved";
-        }
+        if (t.type === "deposit" && isPend(t.status) && t.amount === amount)
+          upd["users/" + uid + "/transactions/" + s.key + "/status"] = "approved";
       });
-      if (Object.keys(updates).length > 0) await update(ref(db), updates);
+      if (Object.keys(upd).length) await update(ref(db), upd);
     }
 
+    // Credit balance
     const balSnap = await get(ref(db, "users/" + uid + "/balance"));
     const cur = balSnap.exists() ? (balSnap.val() || 0) : 0;
     await update(ref(db, "users/" + uid), { balance: +(cur + amount).toFixed(2) });
 
-    toast("✅ " + amount + " ETB approved! ሂሳቡ ወደ ተጠቃሚው ተጨምሯል");
-  } catch(e) {
+    toast("✅ " + amount + " ETB approved! ሂሳቡ ወደ ተጠቃሚ ተጨምሯል");
+  } catch (e) {
+    console.error(e);
     toast("❌ Error: " + e.message);
   }
 }
 
-async function adminCancelDeposit(key) {
+async function _cancelDeposit(key) {
   if (!confirm("ይህን deposit ሰርዝ?")) return;
   try {
     await update(ref(db, "depositRequests/" + key), { status: "cancelled" });
     toast("❌ Deposit cancelled.");
-  } catch(e) {
+  } catch (e) {
     toast("❌ Error: " + e.message);
   }
 }
 
-function makeWithdrawCard(item) {
+// ── Withdrawals ────────────────────────────────────────────────
+function _makeWdCard(item) {
   const pend = isPend(item.status);
-  const div  = document.createElement("div");
+  const cls  = pend ? "acard-pending" : item.status === "approved" ? "acard-approved" : "acard-cancelled";
+  const card = document.createElement("div");
+  card.className = "admin-card " + cls;
 
+  // Row 1
+  const row1 = document.createElement("div");
+  row1.className = "ac-row";
+  const userDiv = _el("div", "ac-user");
+  userDiv.appendChild(_el("div", "ac-name", "@" + (item.username || "unknown")));
+  userDiv.appendChild(_el("div", "ac-uid",  "ID: " + item.uid));
+  row1.appendChild(userDiv);
+  row1.appendChild(_el("div", "ac-amount neg", "-" + item.amount + " ETB"));
+  card.appendChild(row1);
+
+  // Row 2
+  const row2 = document.createElement("div");
+  row2.className = "ac-row ac-meta";
+  row2.appendChild(_el("span", null, "📱 " + (item.phone || "—")));
+  row2.appendChild(_el("span", null, "💸 " + (item.payout || item.amount) + " ETB"));
+  row2.appendChild(_statusBadge(item.status));
+  card.appendChild(row2);
+
+  // Row 3
   if (pend) {
-    div.className = "admin-card acard-pending";
-  } else if (item.status === "approved") {
-    div.className = "admin-card acard-approved";
-  } else {
-    div.className = "admin-card acard-cancelled";
+    const row3 = document.createElement("div");
+    row3.className = "ac-actions";
+    row3.appendChild(_btn("✅ Mark Sent", "ac-approve", () => _approveWithdraw(item.key, item.uid, item.amount)));
+    row3.appendChild(_btn("❌ Refund",    "ac-cancel",  () => _cancelWithdraw(item.key, item.uid, item.amount)));
+    card.appendChild(row3);
   }
 
-  const statusHTML = pend
-    ? `<span class="ac-status st-pending">⏳ Pending</span>`
-    : item.status === "approved"
-      ? `<span class="ac-status st-approved">✅ Sent</span>`
-      : `<span class="ac-status st-cancelled">❌ Cancelled</span>`;
-
-  div.innerHTML =
-    `<div class="ac-row">` +
-      `<div class="ac-user">` +
-        `<div class="ac-name">@${item.username || "unknown"}</div>` +
-        `<div class="ac-uid">ID: ${item.uid}</div>` +
-      `</div>` +
-      `<div class="ac-amount neg">-${item.amount} ETB</div>` +
-    `</div>` +
-    `<div class="ac-row ac-meta">` +
-      `<span>📱 ${item.phone || "—"}</span>` +
-      `<span>💸 ${item.payout || item.amount} ETB</span>` +
-      statusHTML +
-    `</div>` +
-    (pend
-      ? `<div class="ac-actions">` +
-          `<button class="ac-btn ac-approve">✅ Mark Sent</button>` +
-          `<button class="ac-btn ac-cancel">❌ Refund</button>` +
-        `</div>`
-      : "");
-
-  if (pend) {
-    const btns = div.querySelectorAll(".ac-actions .ac-btn");
-    btns[0].addEventListener("click", function() { adminApproveWithdraw(item.key, item.uid, item.amount); });
-    btns[1].addEventListener("click", function() { adminCancelWithdraw(item.key, item.uid, item.amount); });
-  }
-  return div;
+  return card;
 }
 
-function loadAdminWithdraws() {
+function _listenWithdraws() {
   onValue(ref(db, "withdrawRequests"), snap => {
     const list = document.getElementById("adminWithdrawList");
     if (!list) return;
-    list.innerHTML = "";
+
+    while (list.firstChild) list.removeChild(list.firstChild);
 
     if (!snap.exists()) {
-      list.innerHTML = '<div class="admin-empty">ምንም withdrawal request የለም</div>';
+      list.appendChild(_el("div", "admin-empty", "ምንም withdrawal request የለም"));
       return;
     }
 
     const items = [];
-    snap.forEach(s => items.push({ key: s.key, ...s.val() }));
-
-    items.sort((a, b) => {
-      const ap = isPend(a.status) ? 0 : 1;
-      const bp = isPend(b.status) ? 0 : 1;
-      if (ap !== bp) return ap - bp;
-      return (b.ts || 0) - (a.ts || 0);
+    snap.forEach(s => {
+      const v = s.val();
+      items.push({
+        key:      s.key,
+        uid:      v.uid      || "",
+        username: v.username || "",
+        amount:   v.amount   || 0,
+        phone:    v.phone    || "",
+        payout:   v.payout   || v.amount || 0,
+        status:   v.status,
+        ts:       v.ts       || 0
+      });
     });
 
-    items.forEach(item => list.appendChild(makeWithdrawCard(item)));
+    items.sort((a, b) => {
+      const pa = isPend(a.status) ? 0 : 1;
+      const pb = isPend(b.status) ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      return b.ts - a.ts;
+    });
+
+    items.forEach(item => list.appendChild(_makeWdCard(item)));
   });
 }
 
-async function adminApproveWithdraw(key, uid, amount) {
+async function _approveWithdraw(key, uid, amount) {
   if (!confirm(amount + " ETB ተልኳል ብለህ ታረጋግጣለህ?")) return;
   try {
     await update(ref(db, "withdrawRequests/" + key), { status: "approved" });
-
     const txSnap = await get(ref(db, "users/" + uid + "/transactions"));
     if (txSnap.exists()) {
-      const updates = {};
+      const upd = {};
       txSnap.forEach(s => {
         const t = s.val();
-        if (t.type === "withdraw" && isPend(t.status) && t.amount === amount) {
-          updates["users/" + uid + "/transactions/" + s.key + "/status"] = "approved";
-        }
+        if (t.type === "withdraw" && isPend(t.status) && t.amount === amount)
+          upd["users/" + uid + "/transactions/" + s.key + "/status"] = "approved";
       });
-      if (Object.keys(updates).length > 0) await update(ref(db), updates);
+      if (Object.keys(upd).length) await update(ref(db), upd);
     }
-
     toast("✅ Withdrawal marked as sent!");
-  } catch(e) {
+  } catch (e) {
     toast("❌ Error: " + e.message);
   }
 }
 
-async function adminCancelWithdraw(key, uid, amount) {
+async function _cancelWithdraw(key, uid, amount) {
   if (!confirm("Cancel & " + amount + " ETB refund ታደርጋለህ?")) return;
   try {
     await update(ref(db, "withdrawRequests/" + key), { status: "cancelled" });
-
     const txSnap = await get(ref(db, "users/" + uid + "/transactions"));
     if (txSnap.exists()) {
-      const updates = {};
+      const upd = {};
       txSnap.forEach(s => {
         const t = s.val();
-        if (t.type === "withdraw" && isPend(t.status) && t.amount === amount) {
-          updates["users/" + uid + "/transactions/" + s.key + "/status"] = "cancelled";
-        }
+        if (t.type === "withdraw" && isPend(t.status) && t.amount === amount)
+          upd["users/" + uid + "/transactions/" + s.key + "/status"] = "cancelled";
       });
-      if (Object.keys(updates).length > 0) await update(ref(db), updates);
+      if (Object.keys(upd).length) await update(ref(db), upd);
     }
-
+    // Refund
     const balSnap = await get(ref(db, "users/" + uid + "/balance"));
     const cur = balSnap.exists() ? (balSnap.val() || 0) : 0;
     await update(ref(db, "users/" + uid), { balance: +(cur + amount).toFixed(2) });
-
-    toast("↩ Refunded " + amount + " ETB to user");
-  } catch(e) {
+    toast("↩ Refunded " + amount + " ETB");
+  } catch (e) {
     toast("❌ Error: " + e.message);
   }
 }
 
-function loadAdminUsers() {
+// ── Users ──────────────────────────────────────────────────────
+function _listenUsers() {
   onValue(ref(db, "users"), snap => {
     const list = document.getElementById("adminUserList");
     if (!list) return;
-    list.innerHTML = "";
+
+    while (list.firstChild) list.removeChild(list.firstChild);
 
     if (!snap.exists()) {
-      list.innerHTML = '<div class="admin-empty">ምንም user የለም</div>';
+      list.appendChild(_el("div", "admin-empty", "ምንም user የለም"));
       return;
     }
 
     const users = [];
-    snap.forEach(s => users.push({ uid: s.key, ...s.val() }));
-    users.sort((a, b) => (b.balance || 0) - (a.balance || 0));
+    snap.forEach(s => {
+      const v = s.val();
+      users.push({ uid: s.key, name: v.name || "", username: v.username || "", balance: v.balance || 0 });
+    });
+    users.sort((a, b) => b.balance - a.balance);
 
     users.forEach(u => {
       const card = document.createElement("div");
       card.className = "admin-card acard-user";
-      card.innerHTML =
-        `<div class="ac-row">` +
-          `<div class="ac-user">` +
-            `<div class="ac-name">${u.name || u.username || "Unknown"}</div>` +
-            `<div class="ac-uid">@${u.username || "—"} · ID: ${u.uid}</div>` +
-          `</div>` +
-          `<div class="ac-amount pos">${(u.balance || 0).toFixed(2)} ETB</div>` +
-        `</div>` +
-        `<div class="ac-row ac-meta">` +
-          `<button class="ac-btn ac-approve" style="flex:1">💰 Balance አስተካክል</button>` +
-        `</div>`;
 
-      card.querySelector(".ac-btn")
-         .addEventListener("click", function() {
-           adminAdjustBalance(u.uid, u.name || u.username || u.uid, u.balance || 0);
-         });
+      const row1 = document.createElement("div");
+      row1.className = "ac-row";
+      const userDiv = _el("div", "ac-user");
+      userDiv.appendChild(_el("div", "ac-name", u.name || u.username || "Unknown"));
+      userDiv.appendChild(_el("div", "ac-uid",  "@" + (u.username || "—") + " · ID: " + u.uid));
+      row1.appendChild(userDiv);
+      row1.appendChild(_el("div", "ac-amount pos", u.balance.toFixed(2) + " ETB"));
+      card.appendChild(row1);
+
+      const row2 = document.createElement("div");
+      row2.className = "ac-actions";
+      row2.appendChild(_btn("💰 Balance አስተካክል", "ac-approve", () => _adjustBalance(u.uid, u.name || u.username || u.uid, u.balance)));
+      card.appendChild(row2);
+
       list.appendChild(card);
     });
   });
 }
 
-async function adminAdjustBalance(uid, name, cur) {
-  const val = prompt(name + "\nአዲስ balance (አሁን: " + cur + " ETB):");
+async function _adjustBalance(uid, name, cur) {
+  const val = prompt(name + "\nአዲስ balance (አሁን: " + cur.toFixed(2) + " ETB):");
   if (val === null) return;
   const nb = parseFloat(val);
   if (isNaN(nb) || nb < 0) { toast("⚠ ትክክለኛ ቁጥር ያስገቡ"); return; }
   try {
     await update(ref(db, "users/" + uid), { balance: nb });
     toast("✅ Balance → " + nb + " ETB");
-  } catch(e) {
+  } catch (e) {
     toast("❌ Error: " + e.message);
   }
 }
