@@ -216,18 +216,33 @@
         <div class="sub-badge" style="background:rgba(255,0,0,0.2);color:#ff4444;">Baron Bingo</div>
       </div>
       <div class="admin-stats-row">
-        <div class="admin-stat-box"><div class="asb-val" id="adminTotalUsers">—</div><div class="asb-lbl">ተጫዋቾች</div></div>
-        <div class="admin-stat-box"><div class="asb-val" id="adminPendingDep">—</div><div class="asb-lbl">Pending Deposit</div></div>
-        <div class="admin-stat-box"><div class="asb-val" id="adminPendingWd">—</div><div class="asb-lbl">Pending Withdraw</div></div>
+        <div class="admin-stat-box">
+          <div class="asb-val" id="adminTotalUsers">—</div>
+          <div class="asb-lbl">ተጫዋቾች</div>
+        </div>
+        <div class="admin-stat-box">
+          <div class="asb-val" id="adminPendingDep">—</div>
+          <div class="asb-lbl">Pending Deposit</div>
+        </div>
+        <div class="admin-stat-box">
+          <div class="asb-val" id="adminPendingWd">—</div>
+          <div class="asb-lbl">Pending Withdraw</div>
+        </div>
       </div>
       <div class="admin-tabs">
-        <button class="admin-tab active" id="tabDeposit" onclick="adminTab('deposit')">📥 Deposits</button>
-        <button class="admin-tab" id="tabWithdraw" onclick="adminTab('withdraw')">📤 Withdrawals</button>
-        <button class="admin-tab" id="tabUsers" onclick="adminTab('users')">👥 Users</button>
+        <button class="admin-tab active" id="tabDeposit" onclick="window.adminTab('deposit')">📥 Deposits</button>
+        <button class="admin-tab" id="tabWithdraw" onclick="window.adminTab('withdraw')">📤 Withdrawals</button>
+        <button class="admin-tab" id="tabUsers" onclick="window.adminTab('users')">👥 Users</button>
       </div>
-      <div class="admin-panel" id="adminPanelDeposit"><div id="adminDepositList" class="admin-list"></div></div>
-      <div class="admin-panel" id="adminPanelWithdraw" style="display:none"><div id="adminWithdrawList" class="admin-list"></div></div>
-      <div class="admin-panel" id="adminPanelUsers" style="display:none"><div id="adminUserList" class="admin-list"></div></div>
+      <div class="admin-panel" id="adminPanelDeposit">
+        <div id="adminDepositList" class="admin-list"></div>
+      </div>
+      <div class="admin-panel" id="adminPanelWithdraw" style="display:none">
+        <div id="adminWithdrawList" class="admin-list"></div>
+      </div>
+      <div class="admin-panel" id="adminPanelUsers" style="display:none">
+        <div id="adminUserList" class="admin-list"></div>
+      </div>
     </section>
 
     <!-- ===== SCREEN: WITHDRAW ===== -->
