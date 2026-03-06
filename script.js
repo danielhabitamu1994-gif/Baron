@@ -1168,8 +1168,12 @@ function loadDepositHistory() {
     }
 
     // Collect ALL children, sort newest-first, show last 10
-    const txs = [];
-    snap.forEach(child => { txs.push({ ...child.val(), key: child.key }); });
+    // እዚህ ጋር ቀይረው
+onValue(ref(db, `deposits/${tgUser.id}`), (snap) => {
+  const rawData = snap.val();
+  const txs = rawData ? Object.keys(rawData).map(k => ({ ...rawData[k], key: k })) : [];
+  // የተቀረው ኮድ ይቀጥላል...
+
 
     txs
       .sort((a, b) => (b.ts || 0) - (a.ts || 0))  // newest first
@@ -1199,8 +1203,12 @@ function loadWithdrawHistory() {
       return;
     }
 
-    const txs = [];
-    snap.forEach(child => { txs.push({ ...child.val(), key: child.key }); });
+    // እዚህም ጋር ቀይረው
+onValue(ref(db, `withdraws/${tgUser.id}`), (snap) => {
+  const rawData = snap.val();
+  const txs = rawData ? Object.keys(rawData).map(k => ({ ...rawData[k], key: k })) : [];
+  // የተቀረው ኮድ ይቀጥላል...
+
 
     txs
       .filter(t => t.type === "withdraw")
@@ -1268,8 +1276,12 @@ function showHistory() {
     }
 
     // Collect ALL transaction types, sort newest-first
-    const txs = [];
-    snap.forEach(child => { txs.push({ ...child.val(), key: child.key }); });
+    // እዚህም ጋር ቀይረው
+get(ref(db, `deposits/${tgUser.id}`)).then(snap => {
+  const rawData = snap.val();
+  const txs = rawData ? Object.keys(rawData).map(k => ({ ...rawData[k], key: k })) : [];
+  // የተቀረው ኮድ ይቀጥላል...
+
 
     txs
       .sort((a, b) => (b.ts || 0) - (a.ts || 0))
