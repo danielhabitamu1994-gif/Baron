@@ -56,14 +56,14 @@
 
   <!-- TOP BAR -->
   <header class="top-bar">
-    <button class="menu-toggle" onclick="openMenu()">
-      <span></span><span></span><span></span>
-    </button>
-    <div class="top-logo">BARON<span>BINGO</span></div>
     <div class="top-balance" onclick="openWalletModal()">
       <span class="tb-coin">💰</span>
       <span id="topBalance">0</span>
     </div>
+    <div class="top-logo">BARON<span>BINGO</span></div>
+    <button class="menu-toggle" onclick="openMenu()">
+      <span></span><span></span><span></span>
+    </button>
   </header>
 
   <!-- SCREENS CONTAINER -->
@@ -127,13 +127,6 @@
         <!-- LEFT: CALL ZONE -->
         <div class="call-zone">
           <div class="call-zone-title">CALL ZONE</div>
-          <div class="bingo-headers">
-            <span class="bh bh-b">B</span>
-            <span class="bh bh-i">I</span>
-            <span class="bh bh-n">N</span>
-            <span class="bh bh-g">G</span>
-            <span class="bh bh-o">O</span>
-          </div>
           <!-- Current big number -->
           <div class="current-call-wrap">
             <div class="current-call-letter" id="currentCallLetter">-</div>
@@ -142,7 +135,6 @@
           <!-- History strip -->
           <div class="call-history" id="callHistory"></div>
           <!-- All called list -->
-          <div class="called-list-label">ሁሉም የተጠሩ ቁጥሮች</div>
           <div class="called-grid" id="calledGrid">
             <!-- 75 small balls populated by JS -->
           </div>
