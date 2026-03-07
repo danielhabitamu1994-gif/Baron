@@ -170,11 +170,12 @@ input { outline: none; }
 }
 
 .menu-toggle {
-  width: 38px; height: 38px;
+  width: auto; height: 32px;
+  padding: 0 10px;
   display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 5px;
+  align-items: center; justify-content: center; gap: 4px;
   background: var(--surface);
-  border-radius: 10px;
+  border-radius: 20px;
   border: 1px solid var(--border);
   transition: 0.2s;
 }
@@ -206,6 +207,14 @@ input { outline: none; }
   font-size: 0.75rem;
 }
 .tb-coin { font-size: 0.9rem; }
+
+/* Top bar buttons disabled state during game */
+.top-bar-disabled .menu-toggle,
+.top-bar-disabled .top-balance {
+  opacity: 0.35 !important;
+  pointer-events: none !important;
+  cursor: default !important;
+}
 
 /* ===== SCREENS ===== */
 .screens { margin-top: 56px; min-height: calc(100vh - 56px); }
@@ -412,6 +421,7 @@ input { outline: none; }
 .bingo-preview {
   display: grid; grid-template-columns: repeat(5, 1fr);
   gap: 3px; width: 150px;
+  min-height: 150px;
   background: rgba(0,0,0,0.3);
   padding: 8px; border-radius: 12px;
   border: 1px solid var(--border);
@@ -586,8 +596,21 @@ input { outline: none; }
 .called-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 2px;
+  gap: 3px 2px;
 }
+.cg-col-header {
+  text-align: center;
+  font-size: 0.6rem; font-weight: 900;
+  font-family: var(--font-head);
+  padding: 2px 0;
+  border-radius: 4px;
+  margin-bottom: 1px;
+}
+.cg-col-header.cg-hb { color: #ff5252; background: rgba(255,82,82,0.15); }
+.cg-col-header.cg-hi { color: #ffd700; background: rgba(255,215,0,0.15); }
+.cg-col-header.cg-hn { color: #00e676; background: rgba(0,230,118,0.15); }
+.cg-col-header.cg-hg { color: #00e5ff; background: rgba(0,229,255,0.15); }
+.cg-col-header.cg-ho { color: #e040fb; background: rgba(224,64,251,0.15); }
 .cg-num {
   aspect-ratio: 1;
   display: flex; align-items: center; justify-content: center;
@@ -671,13 +694,16 @@ input { outline: none; }
   background: linear-gradient(135deg, #ff4444, #ff1744);
   color: #fff; border-radius: 12px;
   font-weight: 900; font-size: 1rem;
-  letter-spacing: 2px; opacity: 0.35;
-  pointer-events: none;
+  letter-spacing: 2px; opacity: 0.6;
+  pointer-events: auto;
   transition: all 0.3s;
   font-family: var(--font-head);
+  border: 2px solid rgba(255,100,100,0.4);
 }
 .bingo-shout-btn.ready {
-  opacity: 1; pointer-events: auto;
+  opacity: 1;
+  border-color: #ff1744;
+  box-shadow: 0 0 18px rgba(255,68,68,0.5);
   animation: bingoBtnPulse 0.8s ease-in-out infinite alternate;
 }
 @keyframes bingoBtnPulse {
@@ -793,7 +819,8 @@ input { outline: none; }
 .hist-item.hist-withdraw { border-left-color: var(--cyan); }
 
 .hist-left  { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.hist-label { font-weight: 600; font-family: var(--font-am); font-size: 0.83rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hist-label { font-weight: 600; font-family: var(--font-am); font-size: 0.83rem; overflow: hidden; }
+.hist-date { font-size: 0.62rem; color: var(--text-dim); margin-top: 2px; font-family: var(--font-main); letter-spacing: 0.3px; }
 .hist-date  { font-size: 0.62rem; color: rgba(255,255,255,0.35); font-family: var(--font-main); }
 .hist-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
 .hist-amount { font-weight: 800; font-size: 0.9rem; }
