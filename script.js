@@ -1722,7 +1722,7 @@ async function submitWithdraw() {
   if (amt > userBalance)           { toast("⚠ በቂ ሂሳብ የለዎትም!");              return; }
 
   const fee    = +(amt * 0.05).toFixed(2);
-  const payout = +(amt - fee).toFixed(2);
+  const payout = +(amt - 0).toFixed(2);
   const newBal = +(userBalance - amt).toFixed(2);
 
   await update(ref(db, `users/${UID}`), { balance: newBal });
