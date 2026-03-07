@@ -35,8 +35,10 @@ const UID = String(tgUser.id);
 
 // ===== CONSTANTS =====
 const JOIN_SEC  = 30;
-const GAME_SEC  = 60;
 const CALL_MS   = 3500;   // ms between number calls
+const MAX_CALLS = 20;     // max calls per game — 20 × 3.5s = 70s
+// GAME_SEC must cover full game: MAX_CALLS × CALL_MS/1000 + buffer
+const GAME_SEC  = 90;     // 70s game + 20s buffer = 90s
 const COMMISSION = 0.10;  // 10%
 const MIN_REAL   = 1;     // minimum real players to start
 const MAX_PLAYERS = 20;   // maximum in a room
@@ -66,6 +68,8 @@ let isHost         = false;
 let gameCardNums   = [];
 let daubedSet      = new Set();
 let myUsername     = tgUser.username || tgUser.first_name || "player";
+let gameUIInitialized = false;
+let currentRoomJoinDeadline = 0; // ms timestamp from Firebase room
 
 // ===== SYNCHRONIZED CYCLE =====
 // All users share the same cycle based on a fixed epoch anchor
@@ -99,6 +103,15 @@ const $$ = sel => document.querySelectorAll(sel);
 function showScreen(id) {
   $$(".screen").forEach(s => s.classList.remove("active"));
   $(id).classList.add("active");
+  // Disable top bar buttons during game
+  const topBar = document.querySelector(".top-bar");
+  if (topBar) {
+    if (id === "screen-game") {
+      topBar.classList.add("top-bar-disabled");
+    } else {
+      topBar.classList.remove("top-bar-disabled");
+    }
+  }
 }
 
 // ===== TOAST =====
@@ -122,6 +135,7 @@ window.copyPhone = copyPhone;
 
 // ===== MENU =====
 function openMenu() {
+  if ($("screen-game").classList.contains("active")) return;
   $("sideMenu").classList.add("open");
   $("menuOverlay").classList.add("open");
 }
@@ -138,6 +152,7 @@ window.openWithdraw = () => {
   loadWithdrawHistory();
 };
 window.openWalletModal = () => {
+  if ($("screen-game").classList.contains("active")) return;
   $("wmBalance").textContent = userBalance.toFixed(2);
   $("walletModalOverlay").classList.add("active");
   $("walletModal").classList.add("active");
@@ -208,9 +223,9 @@ function buildStakeGrid() {
       <div class="sc-meta">
         <div class="sc-players">
           <span class="sc-live-dot" ${isNP ? 'style="background:#555;box-shadow:none;animation:none"' : ''}></span>
-          <span><span id="sp-${cfg.amount}">${isNP ? 0 : cfg.min}</span> ተጫዋቾች</span>
+          <span><span id="sp-${cfg.amount}">${isNP ? 0 : 0}</span> ተጫዋቾች</span>
         </div>
-        <div class="sc-prize">🏆 <span class="sc-prize-val" id="sw-${cfg.amount}">${isNP ? 0 : cfg.min * cfg.amount}</span> ETB</div>
+        <div class="sc-prize">🏆 <span class="sc-prize-val" id="sw-${cfg.amount}">${isNP ? 0 : 0}</span> ETB</div>
         ${isNP
           ? `<div class="sc-no-players-label">ተጫዋች የለም</div>`
           : `<div class="sc-phase phase-join" id="sph-${cfg.amount}">
@@ -242,6 +257,9 @@ function startCycleEngine() {
   STAKE_CONFIG.forEach(cfg => {
     if (NO_PLAYER_STAKES.has(cfg.amount)) return;
 
+    // Set initial display immediately on load
+    fluctuatePlayers(cfg.amount);
+
     setInterval(() => {
       // Always re-derive from real clock so all users stay in sync
       const synced = getSyncedCycleState(cfg.amount);
@@ -269,22 +287,32 @@ function updateStakeCycleUI(amount) {
   const tv  = $(`stv-${amount}`);
   if (!ph) return;
 
-  if (st.phase === "join") {
-    const rem = JOIN_SEC - st.elapsed;
-    ph.className  = "sc-phase phase-join";
+  // Only fluctuate during join phase — freeze count when game has started
+  const displayedCountBefore = parseInt(($(`sp-${amount}`) || {}).textContent) || 0;
+  if (st.phase === "join" && Math.random() < 0.25) fluctuatePlayers(amount);
+  const displayedCount = parseInt(($(`sp-${amount}`) || {}).textContent) || 0;
+
+  // If 0 or 1 player showing — freeze timer at 30s, never show "started"
+  if (displayedCount <= 1) {
+    ph.className    = "sc-phase phase-join";
     lbl.textContent = "መቀላቀል ይቻላል";
-    tf.className  = "sc-timer-fill tf-join";
-    tf.style.width = ((rem / JOIN_SEC) * 100) + "%";
-    tv.textContent = rem + "s";
-    if (Math.random() < 0.25) fluctuatePlayers(amount);
+    tf.className    = "sc-timer-fill tf-join";
+    tf.style.width  = "100%";
+    tv.textContent  = "30s";
+  } else if (st.phase === "join") {
+    const rem = JOIN_SEC - st.elapsed;
+    ph.className    = "sc-phase phase-join";
+    lbl.textContent = "መቀላቀል ይቻላል";
+    tf.className    = "sc-timer-fill tf-join";
+    tf.style.width  = ((rem / JOIN_SEC) * 100) + "%";
+    tv.textContent  = rem + "s";
   } else {
     const rem = GAME_SEC - st.elapsed;
-    ph.className  = "sc-phase phase-started";
+    ph.className    = "sc-phase phase-started";
     lbl.textContent = "ጨዋታ ጀምሯል";
-    tf.className  = "sc-timer-fill tf-started";
-    tf.style.width = ((rem / GAME_SEC) * 100) + "%";
-    tv.textContent = rem + "s";
-    // Player count frozen during game
+    tf.className    = "sc-timer-fill tf-started";
+    tf.style.width  = ((rem / GAME_SEC) * 100) + "%";
+    tv.textContent  = rem + "s";
   }
 
   // Sync start button if user is on card selection for this stake
@@ -293,15 +321,76 @@ function updateStakeCycleUI(amount) {
   }
 }
 
+// Cache bot display max per stake — re-rolls once per cycle window
+const _botDisplayCache = {};
+function getBotDisplayMax(amount) {
+  if (amount === 10) return 18;  // always active, max 18
+
+  // Use cycle window as cache key so it re-rolls each new join phase
+  const cycleKey = Math.floor(Date.now() / (JOIN_SEC * 1000));
+  const cacheKey = amount + "_" + cycleKey;
+
+  if (_botDisplayCache[cacheKey] !== undefined) {
+    return _botDisplayCache[cacheKey];
+  }
+
+  // Clear old cache entries
+  Object.keys(_botDisplayCache).forEach(k => {
+    if (!k.endsWith("_" + cycleKey)) delete _botDisplayCache[k];
+  });
+
+  const rnd = Math.random();
+  let result = 0;
+
+  if (amount === 20) {
+    // 40% = 0, 60% = 1-10
+    result = rnd < 0.40 ? 0 : Math.floor(Math.random() * 10) + 1;
+  } else if (amount === 50) {
+    // 60% = 0, 40% = 1-6
+    result = rnd < 0.60 ? 0 : Math.floor(Math.random() * 6) + 1;
+  } else if (amount === 100) {
+    const now = new Date();
+    const h = now.getHours(), m = now.getMinutes();
+    const active = (h > 18 || (h === 18 && m >= 0)) && (h < 21 || (h === 21 && m <= 30));
+    result = active ? Math.floor(Math.random() * 4) : 0; // 0-3
+  }
+
+  _botDisplayCache[cacheKey] = result;
+  return result;
+}
+
+function isBotDisplayActive(amount) {
+  // Legacy helper — returns true if bots can show at all right now
+  if (amount === 10) return true;
+  if (amount === 20) return true;   // fluctuatePlayers will randomly zero out
+  if (amount === 50) return true;   // fluctuatePlayers will randomly zero out
+  if (amount === 100) {
+    const now = new Date();
+    const h = now.getHours(), m = now.getMinutes();
+    return (h > 18 || (h === 18 && m >= 0)) && (h < 21 || (h === 21 && m <= 30));
+  }
+  return true;
+}
+
 function fluctuatePlayers(amount) {
   const cfg = STAKE_CONFIG.find(c => c.amount === amount);
   if (!cfg) return;
   const el = $(`sp-${amount}`);
   const we = $(`sw-${amount}`);
   if (!el) return;
-  const cur = parseInt(el.textContent) || cfg.min;
+
+  const maxBots = getBotDisplayMax(amount);
+
+  if (maxBots === 0) {
+    el.textContent = 0;
+    we.textContent = 0;
+    return;
+  }
+
+  const minDisplay = amount === 10 ? cfg.min : 1;
+  const cur = parseInt(el.textContent) || minDisplay;
   const chg = Math.random() > 0.45 ? Math.floor(Math.random() * 3) + 1 : -Math.floor(Math.random() * 2);
-  const nxt = Math.min(Math.max(cur + chg, cfg.min), cfg.max);
+  const nxt = Math.min(Math.max(cur + chg, minDisplay), maxBots);
   el.textContent = nxt;
   we.textContent = nxt * amount;
 }
@@ -322,8 +411,9 @@ function resetPlayerCount(amount, min) {
   const el = $(`sp-${amount}`);
   const we = $(`sw-${amount}`);
   if (!el) return;
-  el.textContent = min;
-  we.textContent = min * amount;
+  const val = isBotDisplayActive(amount) ? min : 0;
+  el.textContent = val;
+  we.textContent = val * amount;
 }
 
 // ===== CARD SELECTION =====
@@ -333,21 +423,85 @@ let takenCards   = new Set();
 async function showCardSelection(amount) {
   selectedStake = amount;
   $("cardBadge").textContent = amount + " ETB";
-  pickedCardNo = 1;
+  pickedCardNo = 0; // 0 = no card selected yet
   showScreen("screen-card");
+
+  // Show "ካርድ ይምረጡ" state immediately before async load
+  const btn = $("startGameBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "👆 ካርድ ይምረጡ";
+    btn.style.opacity = "0.5";
+    btn.style.cursor = "not-allowed";
+    btn.onclick = null;
+  }
+  // Clear preview
+  const preview = $("bingoPreview");
+  if (preview) preview.innerHTML = "";
+  $("cpLabel").textContent = "ካርድ አልተመረጠም";
+
   await loadTakenCards(amount);
   renderCardPicker();
-  renderPreview(1);
-  updateStartBtn(amount);
 }
-window.goHome = () => showScreen("screen-home");
+window.goHome = () => {
+  _joiningGame = false;
+  const btn = $("startGameBtn");
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "🎮 ጨዋታውን ጀምር";
+    btn.style.opacity = "1";
+    btn.style.cursor = "pointer";
+  }
+  showScreen("screen-home");
+};
+
+function enableStartBtn() {
+  const btn = $("startGameBtn");
+  if (!btn) return;
+  if (pickedCardNo === 0) {
+    btn.disabled = true;
+    btn.textContent = "👆 ካርድ ይምረጡ";
+    btn.style.opacity = "0.5";
+    btn.style.cursor = "not-allowed";
+    btn.onclick = null;
+    return;
+  }
+  const st = cycleState[selectedStake];
+  // Only block if cycle is "started" AND displayed player count > 1
+  // (if count is 0 or 1 no real game is running — always allow joining)
+  const displayedCount = parseInt((document.getElementById("sp-" + selectedStake) || {}).textContent) || 0;
+  if (st && st.phase === "started" && displayedCount > 1) {
+    btn.disabled = true;
+    btn.textContent = "⏳ ጨዋታ እየተካሄደ ነው... ይጠብቁ";
+    btn.style.opacity = "0.55";
+    btn.style.cursor = "not-allowed";
+    btn.onclick = null;
+  } else {
+    btn.disabled = false;
+    btn.textContent = "🎮 ጨዋታውን ጀምር";
+    btn.style.opacity = "1";
+    btn.style.cursor = "pointer";
+    btn.onclick = joinGame;
+  }
+}
 
 function updateStartBtn(amount) {
   const btn = $("startGameBtn");
   if (!btn) return;
   const st = cycleState[amount];
   if (!st) return;
-  if (st.phase === "started") {
+  if (pickedCardNo === 0) {
+    btn.disabled = true;
+    btn.textContent = "👆 ካርድ ይምረጡ";
+    btn.style.opacity = "0.5";
+    btn.style.cursor  = "not-allowed";
+    btn.onclick = null;
+    return;
+  }
+  // Only block if cycle is "started" AND displayed player count > 1
+  // (if count is 0 or 1 no real game is running — always allow joining)
+  const displayedCount = parseInt((document.getElementById("sp-" + amount) || {}).textContent) || 0;
+  if (st.phase === "started" && displayedCount > 1) {
     btn.disabled = true;
     btn.textContent = "⏳ ጨዋታ እየተካሄደ ነው... ይጠብቁ";
     btn.style.opacity = "0.55";
@@ -364,18 +518,37 @@ function updateStartBtn(amount) {
 
 async function loadTakenCards(amount) {
   takenCards = new Set();
-  // Check active rooms for this stake — cards in use
+
+  // Step 1: get REAL players already in rooms (these have real card numbers)
   const snap = await get(ref(db, `rooms`));
-  if (!snap.exists()) return;
-  snap.forEach(roomSnap => {
-    const r = roomSnap.val();
-    if (r.stake !== amount || r.status === "finished") return;
-    if (r.players) {
-      Object.values(r.players).forEach(p => {
-        if (p.cardNo) takenCards.add(p.cardNo);
-      });
-    }
-  });
+  if (snap.exists()) {
+    snap.forEach(roomSnap => {
+      const r = roomSnap.val();
+      if (r.stake !== amount || r.status === "finished") return;
+      if (r.players) {
+        Object.values(r.players).forEach(p => {
+          if (!p.isBot && p.cardNo) takenCards.add(p.cardNo);
+        });
+      }
+    });
+  }
+
+  // Step 2: read the DISPLAYED player count from the home screen (the fake/fluctuating number)
+  const displayEl = document.getElementById(`sp-${amount}`);
+  const displayedCount = displayEl ? (parseInt(displayEl.textContent) || 0) : 0;
+
+  // Step 3: if displayed count > actual real players, fill up with deterministic fake taken cards
+  // Use a seed so the same fake cards are taken consistently within a cycle window
+  // Seed based on cycle window only (not elapsed seconds) so taken cards stay
+  // stable during the entire join phase and only reset when a new cycle begins
+  const cycleWindowId = Math.floor(Date.now() / (CYCLE_PERIOD * 1000));
+  let seed = cycleWindowId * 997 + amount * 31;
+  function seededRand() { seed = (seed * 1664525 + 1013904223) & 0xffffffff; return Math.abs(seed) / 0xffffffff; }
+
+  while (takenCards.size < displayedCount) {
+    const fakeCard = Math.floor(seededRand() * 100) + 1;
+    takenCards.add(fakeCard);
+  }
 }
 
 function renderCardPicker() {
@@ -394,6 +567,8 @@ function renderCardPicker() {
       $("cpLabel").textContent = "Card #" + i;
       selectedCardNo = i;
       renderPreview(i);
+      // Enable start button now that a card is picked
+      enableStartBtn();
     });
     grid.appendChild(el);
   }
@@ -452,35 +627,76 @@ function shuffleArr(arr) {
 }
 
 // ===== JOIN GAME =====
+let _joiningGame = false; // prevent double-tap
+
 async function joinGame() {
+  if (_joiningGame) return; // already joining — ignore extra taps
   if (userBalance < selectedStake) {
     toast("⚠ ቀሪ ሂሳብዎ አነስተኛ ነው! Deposit ያድርጉ");
     return;
   }
 
-  selectedCardNo = pickedCardNo;
-  showScreen("screen-lobby");
-  $("lobbyPlayers").innerHTML = "";
+  // Lock button immediately
+  _joiningGame = true;
+  const btn = $("startGameBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "⏳ በመጫን ላይ...";
+    btn.style.opacity = "0.7";
+    btn.style.cursor = "not-allowed";
+  }
 
-  // Deduct stake
-  await update(ref(db, `users/${UID}`), { balance: userBalance - selectedStake });
+  try {
+    selectedCardNo = pickedCardNo;
 
-  // Find or create room
-  const roomId = await findOrCreateRoom(selectedStake);
-  currentRoomId = roomId;
+    // Deduct stake
+    await update(ref(db, `users/${UID}`), { balance: userBalance - selectedStake });
+    // Log stake deduction as a transaction
+    const stakeTxRef = push(ref(db, `users/${UID}/transactions`));
+    await set(stakeTxRef, {
+      type: "stake",
+      stake: selectedStake,
+      amount: selectedStake,
+      ts: serverTimestamp()
+    });
 
-  // Add player to room
-  await update(ref(db, `rooms/${roomId}/players/${UID}`), {
-    uid: UID,
-    name: myUsername,
-    username: "@" + (tgUser.username || myUsername),
-    cardNo: selectedCardNo,
-    isBot: false,
-    joinedAt: serverTimestamp()
-  });
+    // Find or create room
+    const roomId = await findOrCreateRoom(selectedStake);
+    currentRoomId = roomId;
 
-  // Listen to room
-  listenRoom(roomId);
+    // Add player to room
+    await update(ref(db, `rooms/${roomId}/players/${UID}`), {
+      uid: UID,
+      name: myUsername,
+      username: "@" + (tgUser.username || myUsername),
+      cardNo: selectedCardNo,
+      isBot: false,
+      joinedAt: serverTimestamp()
+    });
+
+    // Fetch joinDeadline from this room so overlay countdown is accurate
+    const roomSnap = await get(ref(db, `rooms/${roomId}`));
+    if (roomSnap.exists() && roomSnap.val().joinDeadline) {
+      currentRoomJoinDeadline = roomSnap.val().joinDeadline;
+    }
+
+    // Go directly to game screen (skip lobby), show waiting state
+    gameUIInitialized = false;
+    showGameScreenWaiting();
+
+    // Listen to room
+    listenRoom(roomId);
+  } catch (err) {
+    // On error, re-enable button so user can try again
+    _joiningGame = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "🎮 ጨዋታውን ጀምር";
+      btn.style.opacity = "1";
+      btn.style.cursor = "pointer";
+    }
+    toast("❌ ስህተት ተፈጥሯል። እንደገና ይሞክሩ");
+  }
 }
 window.joinGame = joinGame;
 
@@ -509,11 +725,13 @@ async function findOrCreateRoom(stake) {
   const pushed  = push(newRoom);
   const roomId  = pushed.key;
 
+  const joinDeadline = Date.now() + JOIN_SEC * 1000;
   await set(ref(db, `rooms/${roomId}`), {
     id: roomId,
     stake,
     status: "waiting",
     createdAt: serverTimestamp(),
+    joinDeadline,
     hostUid: UID,
     players: {},
     calledNumbers: []
@@ -543,24 +761,43 @@ function listenRoom(roomId) {
 }
 
 function handleRoomUpdate(room, roomId) {
-  const players = room.players ? Object.values(room.players) : [];
+  const players     = room.players ? Object.values(room.players) : [];
   const realPlayers = players.filter(p => !p.isBot);
 
   if (room.status === "waiting") {
-    updateLobbyUI(players, room.stake);
-    // Host decides when to start
-    if (isHost && realPlayers.length >= MIN_REAL) {
+    // Sync joinDeadline so countdown stays accurate
+    if (room.joinDeadline && room.joinDeadline !== currentRoomJoinDeadline) {
+      currentRoomJoinDeadline = room.joinDeadline;
+      startWaitingCountdown();
+    }
+
+    updateGameWaitingUI(players, room.stake);
+
+    // HOST HANDOVER: if the original host left, earliest real player becomes new host
+    const hostStillIn = room.hostUid && realPlayers.some(p => p.uid === room.hostUid);
+    let amHost = (room.hostUid === UID) || isHost;
+
+    if (!hostStillIn && realPlayers.length >= MIN_REAL) {
+      const sorted = [...realPlayers].sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+      if (sorted[0] && sorted[0].uid === UID) {
+        amHost = true;
+        isHost = true;
+        update(ref(db, "rooms/" + roomId), { hostUid: UID }).catch(console.error);
+      }
+    }
+
+    if (amHost && realPlayers.length >= MIN_REAL) {
+      isHost = true;
       scheduleGameStart(roomId, room);
     }
+
   } else if (room.status === "playing") {
-    // All screens (lobby OR card-select) transition to game screen
-    if (!$("screen-game").classList.contains("active")) {
+    hideGameWaitingOverlay();
+    if (!gameUIInitialized) {
+      gameUIInitialized = true;
       startGameUI(room);
     }
-    // Sync called numbers for every player
     syncCalledNumbers(room.calledNumbers || []);
-
-    // Check if someone shouted bingo
     if (room.winner) {
       handleWinner(room.winner, room);
     }
@@ -572,52 +809,145 @@ function handleRoomUpdate(room, roomId) {
 }
 
 let startScheduled = false;
-function scheduleGameStart(roomId, room) {
-  if (startScheduled) return;
-  startScheduled = true;
+let startScheduledRoomId = null;
 
-  const stake    = room.stake;
-  const players  = room.players ? Object.values(room.players) : [];
-  const realCount = players.filter(p => !p.isBot).length;
+// ===== BOT COUNT CALCULATOR =====
+function calcBotsNeeded(stake, realCount) {
+  const rnd = Math.random();
 
-  // Add bots for all stake levels
-  let allPlayers = [...players];
-  if (allPlayers.length < 6) {
-    const botsNeeded = Math.floor(Math.random() * (19 - 3 + 1)) + 3;
-    const shuffledNames = shuffleArr([...BOT_NAMES]);
-    const botUpdates = {};
-    for (let i = 0; i < botsNeeded && allPlayers.length < MAX_PLAYERS; i++) {
-      const botId  = "bot_" + i + "_" + Date.now();
-      const cardNo = pickBotCardNo(allPlayers);
-      botUpdates[botId] = {
-        uid: botId,
-        name: shuffledNames[i % shuffledNames.length],
-        username: shuffledNames[i % shuffledNames.length],
-        cardNo,
-        isBot: true,
-        joinedAt: Date.now()
-      };
-      allPlayers.push(botUpdates[botId]);
-    }
-    update(ref(db, `rooms/${roomId}/players`), botUpdates);
+  if (stake === 10) {
+    // No bots if 9+ real players
+    if (realCount >= 9) return 0;
+    return Math.floor(Math.random() * (19 - 3 + 1)) + 3;
   }
 
-  // Generate call order (75 numbers shuffled)
+  // For all other stakes: no bots if 3+ real players
+  if (realCount >= 3) return 0;
+
+  // Solo player (realCount === 1): always give exactly 4 bots for 20/50/100
+  if (realCount === 1) return 4;
+
+  if (stake === 20) {
+    // 40% chance = 0 bots, 60% chance = 1–10 bots
+    if (rnd < 0.40) return 0;
+    return Math.floor(Math.random() * 10) + 1; // 1–10
+  }
+
+  if (stake === 50) {
+    // 60% chance = 0 bots, 40% chance = 1–6 bots
+    if (rnd < 0.60) return 0;
+    return Math.floor(Math.random() * 6) + 1; // 1–6
+  }
+
+  if (stake === 100) {
+    // Only between 18:00–21:30 local time: 0–3 bots, else 0
+    const now = new Date();
+    const h = now.getHours();
+    const m = now.getMinutes();
+    const afterStart  = h > 18 || (h === 18 && m >= 0);
+    const beforeEnd   = h < 21 || (h === 21 && m <= 30);
+    if (afterStart && beforeEnd) {
+      return Math.floor(Math.random() * 4); // 0–3
+    }
+    return 0;
+  }
+
+  return 0;
+}
+
+function scheduleGameStart(roomId, room) {
+  if (startScheduled && startScheduledRoomId === roomId) return;
+  startScheduled = true;
+  startScheduledRoomId = roomId;
+
   const callOrder = shuffleArr(Array.from({length:75}, (_,i) => i+1));
 
-  setTimeout(async () => {
-    await update(ref(db, `rooms/${roomId}`), {
-      status: "playing",
-      startedAt: serverTimestamp(),
-      callOrder,
-      calledNumbers: [],
-      callIndex: 0
-    });
+  async function launchWhenReady() {
+    if (!startScheduled) return;
 
-    startScheduled = false;
-    isHost = true;
-    startCallerLoop(roomId);
-  }, 3000);
+    // Fetch fresh room data — reset & bail on any error
+    let freshRoom;
+    try {
+      const freshSnap = await get(ref(db, `rooms/${roomId}`));
+      if (!freshSnap.exists()) { startScheduled = false; startScheduledRoomId = null; return; }
+      freshRoom = freshSnap.val();
+    } catch(e) {
+      console.error("[scheduleGameStart] fetch error:", e);
+      startScheduled = false; startScheduledRoomId = null;
+      return;
+    }
+
+    // Someone else already started — nothing to do
+    if (freshRoom.status === "playing") {
+      startScheduled = false; startScheduledRoomId = null;
+      return;
+    }
+
+    const deadline = freshRoom.joinDeadline || (Date.now() + JOIN_SEC * 1000);
+    const remainMs = deadline - Date.now();
+
+    // Time remaining — come back closer to deadline
+    if (remainMs > 500) {
+      setTimeout(launchWhenReady, Math.min(remainMs, 2000));
+      return;
+    }
+
+    // ── Deadline reached ────────────────────────────────────────
+    // 1. Add bots immediately (fire-and-forget style — don't block game start)
+    const realNow    = freshRoom.players
+      ? Object.values(freshRoom.players).filter(p => !p.isBot).length
+      : 0;
+    const allPlayers = freshRoom.players ? Object.values(freshRoom.players) : [];
+    const botsNeeded = calcBotsNeeded(freshRoom.stake, realNow);
+
+    if (botsNeeded > 0) {
+      const shuffledNames = shuffleArr([...BOT_NAMES]);
+      const botUpdates = {};
+      let bots = [...allPlayers];
+      for (let i = 0; i < botsNeeded && bots.length < MAX_PLAYERS; i++) {
+        const botId  = "bot_" + i + "_" + Date.now();
+        const cardNo = pickBotCardNo(bots);
+        botUpdates[botId] = {
+          uid:      botId,
+          name:     shuffledNames[i % shuffledNames.length],
+          username: shuffledNames[i % shuffledNames.length],
+          cardNo,
+          isBot:    true,
+          joinedAt: Date.now()
+        };
+        bots.push(botUpdates[botId]);
+      }
+      // Add bots in parallel with game start — don't await so it never blocks
+      update(ref(db, `rooms/${roomId}/players`), botUpdates)
+        .catch(e => console.error("[scheduleGameStart] bot add error:", e));
+    }
+
+    // 2. Write "playing" immediately — retries up to 3 times on failure
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await update(ref(db, `rooms/${roomId}`), {
+          status:        "playing",
+          startedAt:     serverTimestamp(),
+          hostUid:       UID,
+          callOrder,
+          calledNumbers: [],
+          callIndex:     0
+        });
+        // Success
+        startScheduled = false; startScheduledRoomId = null;
+        return;
+      } catch(e) {
+        console.error(`[scheduleGameStart] write attempt ${attempt} failed:`, e);
+        if (attempt < 3) await new Promise(r => setTimeout(r, 500));
+      }
+    }
+
+    // All 3 attempts failed — reset flag so the next Firebase event can retry
+    console.error("[scheduleGameStart] all write attempts failed, resetting flag");
+    startScheduled = false; startScheduledRoomId = null;
+  }
+
+  setTimeout(launchWhenReady, 300);
 }
 
 function pickBotCardNo(existingPlayers) {
@@ -656,18 +986,181 @@ function updateLobbyUI(players, stake) {
   }
 }
 
+// ===== FIX 4: GAME SCREEN WAITING HELPERS =====
+// Show game screen immediately with a waiting overlay
+function showGameScreenWaiting() {
+  showScreen("screen-game");
+  // Build empty card and grid so the screen looks ready
+  gameCardNums = generateCard(selectedCardNo);
+  daubedSet = new Set([12]);
+  renderGameCard(gameCardNums);
+  buildCalledGrid();
+
+  // Show waiting overlay on the game screen
+  let overlay = document.getElementById("gameWaitingOverlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "gameWaitingOverlay";
+    overlay.style.cssText = `
+      position:fixed; inset:0; background:rgba(10,10,20,0.88);
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      z-index:500; gap:16px;
+    `;
+    overlay.innerHTML = `
+      <div style="width:56px;height:56px;border:4px solid #ffd700;border-top-color:transparent;border-radius:50%;animation:spin 0.9s linear infinite;"></div>
+      <div style="font-family:var(--font-am);font-size:1.1rem;color:#ffd700;font-weight:700;" id="gwolTitle">ተጫዋቾችን በመጠበቅ ላይ...</div>
+      <div style="font-family:var(--font-am);font-size:0.85rem;color:#aaa;" id="gwolSub">ጨዋታ እስኪጀምር ይጠብቁ...</div>
+      <div style="font-size:2rem;font-weight:900;color:#fff;font-family:var(--font-main);" id="gwolTimer">30</div>
+
+    `;
+    document.body.appendChild(overlay);
+  }
+  overlay.style.display = "flex";
+  startWaitingCountdown();
+}
+
+let _waitCountdownInt = null;
+function startWaitingCountdown() {
+  if (_waitCountdownInt) clearInterval(_waitCountdownInt);
+  _waitCountdownInt = setInterval(async () => {
+    const timerEl = document.getElementById("gwolTimer");
+    const titleEl = document.getElementById("gwolTitle");
+    const subEl   = document.getElementById("gwolSub");
+    if (!timerEl) { clearInterval(_waitCountdownInt); _waitCountdownInt = null; return; }
+
+    const remMs  = currentRoomJoinDeadline ? currentRoomJoinDeadline - Date.now() : -1;
+    const remSec = Math.ceil(remMs / 1000);
+
+    if (remMs > 0) {
+      timerEl.textContent = remSec;
+      titleEl.textContent = "ተጫዋቾችን በመጠበቅ ላይ...";
+      subEl.textContent   = "ጨዋታ ሲጀምር ወዲያው ይነግርዎታል...";
+    } else {
+      // ── Countdown hit 0 ─────────────────────────────────────
+      clearInterval(_waitCountdownInt);
+      _waitCountdownInt = null;
+      timerEl.textContent = "0";
+
+      if (!currentRoomId) return;
+
+      try {
+        const snap = await get(ref(db, `rooms/${currentRoomId}`));
+        if (!snap.exists()) return;
+        const r = snap.val();
+
+        if (r.status === "playing") {
+          // Already playing — show board immediately
+          hideGameWaitingOverlay();
+          if (!gameUIInitialized) { gameUIInitialized = true; startGameUI(r); }
+          syncCalledNumbers(r.calledNumbers || []);
+
+        } else if (r.joinDeadline && r.joinDeadline > Date.now()) {
+          // Host pushed deadline — restart countdown with new value
+          currentRoomJoinDeadline = r.joinDeadline;
+          startWaitingCountdown();
+
+        } else {
+          // ── BACKUP HOST LOGIC ──────────────────────────────
+          // Status is still "waiting" and deadline has passed.
+          // Any player (not just the host) attempts to start the game.
+          // This handles the case where the original host disconnected.
+          if (!startScheduled) {
+            startScheduled = true;
+            startScheduledRoomId = currentRoomId;
+            const callOrder = shuffleArr(Array.from({length:75}, (_,i) => i+1));
+
+            const realNow    = r.players ? Object.values(r.players).filter(p => !p.isBot).length : 0;
+            const allPlayers = r.players ? Object.values(r.players) : [];
+            const botsNeeded = calcBotsNeeded(r.stake, realNow);
+
+            // Add bots async without blocking
+            if (botsNeeded > 0) {
+              const shuffledNames = shuffleArr([...BOT_NAMES]);
+              const botUpdates = {};
+              let bots = [...allPlayers];
+              for (let i = 0; i < botsNeeded && bots.length < MAX_PLAYERS; i++) {
+                const botId  = "bot_" + i + "_" + Date.now();
+                const cardNo = pickBotCardNo(bots);
+                botUpdates[botId] = {
+                  uid: botId, name: shuffledNames[i % shuffledNames.length],
+                  username: shuffledNames[i % shuffledNames.length],
+                  cardNo, isBot: true, joinedAt: Date.now()
+                };
+                bots.push(botUpdates[botId]);
+              }
+              update(ref(db, `rooms/${currentRoomId}/players`), botUpdates)
+                .catch(e => console.error("[backup] bot add error:", e));
+            }
+
+            // Write "playing" — retry up to 3 times
+            (async () => {
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                  await update(ref(db, `rooms/${currentRoomId}`), {
+                    status:        "playing",
+                    startedAt:     serverTimestamp(),
+                    hostUid:       UID,
+                    callOrder,
+                    calledNumbers: [],
+                    callIndex:     0
+                  });
+                  startScheduled = false; startScheduledRoomId = null;
+                  return;
+                } catch(e) {
+                  console.error(`[backup] write attempt ${attempt} failed:`, e);
+                  if (attempt < 3) await new Promise(res => setTimeout(res, 500));
+                }
+              }
+              startScheduled = false; startScheduledRoomId = null;
+            })();
+          }
+
+          // While backup host is writing, keep polling so UI reacts as soon as
+          // Firebase fires — either from this client or the original host
+          (function pollUntilPlaying() {
+            if (!currentRoomId) return;
+            get(ref(db, `rooms/${currentRoomId}`))
+              .then(s => {
+                if (!s.exists()) return;
+                const rv = s.val();
+                if (rv.status === "playing") {
+                  hideGameWaitingOverlay();
+                  if (!gameUIInitialized) { gameUIInitialized = true; startGameUI(rv); }
+                  syncCalledNumbers(rv.calledNumbers || []);
+                } else {
+                  setTimeout(pollUntilPlaying, 500);
+                }
+              })
+              .catch(e => { console.error("[poll]", e); setTimeout(pollUntilPlaying, 1000); });
+          })();
+        }
+      } catch(e) { console.error("[countdown end]", e); }
+    }
+  }, 1000);
+}
+
+function updateGameWaitingUI(players, stake) {
+  // No-op: countdown is driven purely by joinDeadline in startWaitingCountdown
+}
+
+function hideGameWaitingOverlay() {
+  if (_waitCountdownInt) { clearInterval(_waitCountdownInt); _waitCountdownInt = null; }
+  const overlay = document.getElementById("gameWaitingOverlay");
+  if (overlay) overlay.style.display = "none";
+}
+
 function cancelLobby() {
   if (roomListener) { roomListener(); roomListener = null; }
   if (currentRoomId) {
+    // FIX 6: Remove player from room but NO refund — stake is forfeited
     remove(ref(db, `rooms/${currentRoomId}/players/${UID}`));
-    // Refund
-    update(ref(db, `users/${UID}`), { balance: userBalance + selectedStake });
   }
+  hideGameWaitingOverlay();
   startScheduled = false;
   currentRoomId  = null;
   isHost = false;
   showScreen("screen-home");
-  toast("🔄 ጨዋታ ተሰርዟል። ገንዘብዎ ተመልሷል");
+  toast("🚪 ጨዋታ ተሰርዟል።");
 }
 window.cancelLobby = cancelLobby;
 
@@ -675,11 +1168,20 @@ window.cancelLobby = cancelLobby;
 function startGameUI(room) {
   showScreen("screen-game");
   const players = room.players ? Object.values(room.players) : [];
-  const prize   = calcPrize(players.length, room.stake);
 
   $("gtbRound").textContent   = "Stake: " + room.stake + " ETB";
   $("gtbPlayers").textContent = "👥 " + players.length;
-  $("gtbPrize").textContent   = "🏆 " + prize + " ETB";
+
+  // FIX 2: Fetch fresh room data to get all players including bots for accurate prize
+  get(ref(db, `rooms/${currentRoomId}`)).then(snap => {
+    if (!snap.exists()) return;
+    const freshRoom = snap.val();
+    const allPlayers = freshRoom.players ? Object.values(freshRoom.players) : [];
+    const prize = calcPrize(allPlayers.length, freshRoom.stake);
+    $("gtbPrize").textContent   = "🏆 " + prize + " ETB";
+    $("gtbPlayers").textContent = "👥 " + allPlayers.length;
+    renderPlayersStrip(allPlayers);
+  });
 
   // Build player card
   gameCardNums = generateCard(selectedCardNo);
@@ -687,11 +1189,14 @@ function startGameUI(room) {
   renderGameCard(gameCardNums);
   buildCalledGrid();
 
-  // Players strip
+  // Players strip (initial render, updated above after fetch)
   renderPlayersStrip(players);
 
-  // Host starts caller loop
-  if (isHost) startCallerLoop(currentRoomId);
+  // Determine host from room data (reliable — not from local isHost flag)
+  if (room.hostUid === UID) {
+    isHost = true;
+    startCallerLoop(currentRoomId);
+  }
 }
 
 function renderGameCard(nums) {
@@ -710,25 +1215,42 @@ function renderGameCard(nums) {
 function buildCalledGrid() {
   const grid = $("calledGrid");
   grid.innerHTML = "";
-  for (let n = 1; n <= 75; n++) {
-    const el = document.createElement("div");
-    el.id = "cg-" + n;
-    el.className = "cg-num cg-" + numToLetter(n).toLowerCase();
-    el.textContent = n;
-    grid.appendChild(el);
+
+  // Column definitions: letter, color class, range start
+  const cols = [
+    { letter: "B", cls: "b", start: 1  },
+    { letter: "I", cls: "i", start: 16 },
+    { letter: "N", cls: "n", start: 31 },
+    { letter: "G", cls: "g", start: 46 },
+    { letter: "O", cls: "o", start: 61 },
+  ];
+
+  // Build row by row: first row = headers, then 15 rows of numbers
+  // Grid is 5 columns × 16 rows (1 header + 15 numbers)
+  for (let row = 0; row < 16; row++) {
+    cols.forEach(col => {
+      if (row === 0) {
+        // Header row
+        const h = document.createElement("div");
+        h.className = "cg-col-header cg-h" + col.cls;
+        h.textContent = col.letter;
+        grid.appendChild(h);
+      } else {
+        const n = col.start + (row - 1);
+        const el = document.createElement("div");
+        el.id = "cg-" + n;
+        el.className = "cg-num cg-" + col.cls;
+        el.textContent = n;
+        grid.appendChild(el);
+      }
+    });
   }
 }
 
 function renderPlayersStrip(players) {
+  // Players strip hidden per design update
   const strip = $("playersStrip");
-  strip.innerHTML = "";
-  players.forEach(p => {
-    const chip = document.createElement("div");
-    chip.className = "ps-chip" + (p.uid === UID ? " ps-self" : p.isBot ? " ps-bot" : "");
-    chip.textContent = (p.uid === UID ? "⭐ " : "") + p.username;
-    chip.id = "pchip-" + p.uid;
-    strip.appendChild(chip);
-  });
+  if (strip) strip.innerHTML = "";
 }
 
 function calcPrize(playerCount, stake) {
@@ -749,10 +1271,10 @@ function startCallerLoop(roomId) {
     const callOrder = room.callOrder || [];
     const idx = room.callIndex || 0;
 
-    if (idx >= callOrder.length || idx >= 20) {
+    if (idx >= callOrder.length || idx >= MAX_CALLS) {
       clearInterval(callerInterval);
-      // If we hit 20 calls and no winner yet, find best scoring player
-      if (idx >= 20 && !room.winner) {
+      // If we hit max calls and no winner yet, find best scoring player
+      if (idx >= MAX_CALLS && !room.winner) {
         forceWinnerAt20(room, roomId);
       }
       return;
@@ -781,7 +1303,7 @@ function syncCalledNumbers(calledNums) {
 
   // Update call counter
   const countEl = $("gtbCallCount");
-  if (countEl) countEl.textContent = `Call ${calledNums.length}/20`;
+  if (countEl) countEl.textContent = `Call ${calledNums.length}/${MAX_CALLS}`;
 
   // Big display
   $("currentCallLetter").textContent = numToLetter(latest);
@@ -893,7 +1415,7 @@ function getWinCells(daubed) {
 // ===== SHOUT BINGO =====
 async function shoutBingo() {
   if (!checkBingo(daubedSet)) {
-    toast("⚠ ገና ቢንጎ አልሆነም! ሁሉም ቁጥሮች አልተዳቡም");
+    toast("⚠ ገና ቢንጎ አልሆነም! ቁጥሮችዎ ገና አልተዛመዱም");
     return;
   }
   const snap = await get(ref(db, `rooms/${currentRoomId}`));
@@ -941,9 +1463,9 @@ function checkBotBingo(room, calledNumbers, roomId) {
   const players = Object.values(room.players);
   const bots = players.filter(p => p.isBot);
 
-  if (calledNumbers.length < 20) return;
+  if (calledNumbers.length < MAX_CALLS) return;
 
-  // At exactly 20 calls, find the bot with most matches and declare winner
+  // At exactly MAX_CALLS, find the bot with most matches and declare winner
   let bestBot = null;
   let bestScore = -1;
   bots.forEach(bot => {
@@ -1044,18 +1566,69 @@ function cleanupGame() {
   currentRoomId = null;
   isHost = false;
   startScheduled = false;
+  gameUIInitialized = false;
+  _joiningGame = false;
+  startScheduled = false;
+  startScheduledRoomId = null;
+  currentRoomJoinDeadline = 0;
   daubedSet = new Set();
   gameCardNums = [];
 }
 
 // ===== LEAVE GAME =====
 function leaveGame() {
-  if (currentRoomId) {
-    remove(ref(db, `rooms/${currentRoomId}/players/${UID}`));
-  }
-  cleanupGame();
-  showScreen("screen-home");
-  toast("🚪 ጨዋታውን ለቅቀዋል");
+  // Show confirmation dialog instead of leaving immediately
+  const overlay = document.createElement("div");
+  overlay.id = "leaveConfirmOverlay";
+  overlay.style.cssText = `
+    position:fixed; inset:0; background:rgba(0,0,0,0.75);
+    display:flex; align-items:center; justify-content:center;
+    z-index:9999;
+  `;
+  overlay.innerHTML = `
+    <div style="
+      background:#0d1022; border:1px solid rgba(255,215,0,0.25);
+      border-radius:18px; padding:28px 24px; max-width:280px; width:90%;
+      text-align:center; box-shadow:0 8px 40px rgba(0,0,0,0.7);
+    ">
+      <div style="font-size:2rem; margin-bottom:10px;">⚠️</div>
+      <div style="font-family:var(--font-am); font-size:1rem; font-weight:700; color:#fff; margin-bottom:8px;">
+        ጨዋታውን ለቀው መውጣት ይፈልጋሉ?
+      </div>
+      <div style="font-family:var(--font-am); font-size:0.78rem; color:#aaa; margin-bottom:22px;">
+        ጨዋታው ይቀጥላል፣ ግን ሂሳብዎ አይመለስም።
+      </div>
+      <div style="display:flex; gap:12px; justify-content:center;">
+        <button id="leaveConfirmYes" style="
+          flex:1; padding:12px; border-radius:10px;
+          background:linear-gradient(135deg,#ff4444,#ff1744);
+          color:#fff; font-weight:800; font-size:0.9rem;
+          border:none; cursor:pointer;
+        ">አዎ፣ ውጣ</button>
+        <button id="leaveConfirmNo" style="
+          flex:1; padding:12px; border-radius:10px;
+          background:rgba(255,255,255,0.08);
+          border:1px solid rgba(255,255,255,0.15);
+          color:#fff; font-weight:800; font-size:0.9rem;
+          cursor:pointer;
+        ">አይ፣ ቀጥል</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  document.getElementById("leaveConfirmYes").onclick = () => {
+    overlay.remove();
+    if (currentRoomId) {
+      remove(ref(db, `rooms/${currentRoomId}/players/${UID}`));
+    }
+    cleanupGame();
+    showScreen("screen-home");
+    toast("🚪 ጨዋታውን ለቅቀዋል");
+  };
+  document.getElementById("leaveConfirmNo").onclick = () => {
+    overlay.remove();
+  };
 }
 window.leaveGame = leaveGame;
 
@@ -1100,6 +1673,13 @@ window.submitDeposit = submitDeposit;
 
 // Single persistent listener — started once at app init, never re-created
 let _depHistStarted = false;
+
+function fmtDate(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 function loadDepositHistory() {
   if (_depHistStarted) return; // already listening
   _depHistStarted = true;
@@ -1115,9 +1695,12 @@ function loadDepositHistory() {
        .slice(0, 8)
        .forEach(t => {
          const el = document.createElement("div");
+         const depDate = fmtDate(t.ts);
          el.className = `hist-item hist-dep ${t.status === "pending" ? "hist-pending" : ""}`;
          el.innerHTML = `
-           <div class="hist-label">📥 Deposit</div>
+           <div class="hist-label">📥 Deposit
+             ${depDate ? `<div class="hist-date">${depDate}</div>` : ""}
+           </div>
            <div class="hist-right">
              <div class="hist-amount pos">+${t.amount} ETB</div>
              ${t.status === "pending"
@@ -1198,13 +1781,37 @@ async function showHistory() {
   txs.reverse().forEach(t => {
     const el = document.createElement("div");
     const cls = t.type === "win" ? "hist-win" : t.type === "deposit" ? "hist-dep" : "hist-bet";
-    const icon = t.type === "win" ? "🏆" : t.type === "deposit" ? "📥" : "🎯";
+    const icon = t.type === "win" ? "🏆" : t.type === "deposit" ? "📥" : t.type === "withdraw" ? "📤" : "🎯";
     const pos = t.type === "win" || t.type === "deposit";
+    const dateStr = fmtDate(t.ts);
+    // Label and amount logic
+    let label, displayAmt, amtClass;
+    if (t.type === "win") {
+      label = "ድል";
+      displayAmt = "+" + t.amount + " ETB";
+      amtClass = "pos";
+    } else if (t.type === "deposit") {
+      label = "Deposit";
+      displayAmt = "+" + t.amount + " ETB";
+      amtClass = "pos";
+    } else if (t.type === "withdraw") {
+      label = "Withdraw";
+      displayAmt = "-" + t.amount + " ETB";
+      amtClass = "neg";
+    } else {
+      // stake / game entry fee
+      label = "ጨዋታ ክፍያ";
+      displayAmt = "-" + (t.stake || t.amount) + " ETB";
+      amtClass = "neg";
+    }
     el.className = `hist-item ${cls}`;
     el.innerHTML = `
-      <div class="hist-label">${icon} ${t.type === "win" ? "ድል" : t.type === "deposit" ? "Deposit" : "Stake"} — ${t.stake||t.amount} ETB</div>
+      <div class="hist-label">
+        ${icon} ${label}${t.stake ? " (" + t.stake + " ETB)" : ""}
+        ${dateStr ? `<div class="hist-date">${dateStr}</div>` : ""}
+      </div>
       <div class="hist-right">
-        <div class="hist-amount ${pos?"pos":"neg"}">${pos?"+":"-"}${t.amount} ETB</div>
+        <div class="hist-amount ${amtClass}">${displayAmt}</div>
         ${t.status === "pending" ? `<div class="hist-status">⏳ Pending</div>` : ""}
       </div>
     `;
